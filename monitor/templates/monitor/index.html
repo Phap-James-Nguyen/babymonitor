@@ -1,0 +1,251 @@
+{% load static %}
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Baby Monitor</title>
+  <link rel="stylesheet" href="{% static 'monitor/app.css' %}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+  <header class="header">
+    <div>
+      <div class="title">🍼 Baby Monitor</div>
+      <div class="subtitle">Breathing • Pulse • Temperature • Cry Detection</div>
+    </div>
+
+    <div class="header-right">
+      <div id="connBadge" class="badge badge-warn">Connecting…</div>
+      <div class="tiny" id="lastUpdated">Last update: --</div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- STATUS -->
+    <section id="statusCard" class="status status-ok">
+      <div class="status-top">
+        <div>
+          <div class="label">System Status</div>
+          <div id="statusText" class="status-text">OK</div>
+          <div id="statusSub" class="tiny">Waiting for data…</div>
+        </div>
+
+        <div class="status-actions">
+          <button id="ackBtn" class="btn">Acknowledge</button>
+        </div>
+      </div>
+
+      <div class="status-bottom">
+        <div class="mini" id="alertTimer">No alert</div>
+        <div class="mini" id="cryBanner">Cry: --</div>
+      </div>
+    </section>
+
+    <!-- METRICS GRID -->
+    <section class="grid">
+      <div class="card">
+        <div class="label">Breaths / min</div>
+        <div class="metric" id="bpm">--</div>
+        <div class="tiny">Respiration rate</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Pulse (HR)</div>
+        <div class="metric" id="pulse">--</div>
+        <div class="tiny">beats/min</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Body Temp</div>
+        <div class="metric" id="temp">--</div>
+        <div class="tiny">°C (and °F)</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Cry Detection</div>
+        <div class="metric small" id="crying">--</div>
+        <div class="tiny">Level: <span id="cryLevel">--</span></div>
+      </div>
+    </section>
+
+    <!-- CHARTS -->
+    <section class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">Breathing Waveform</div>
+            <div class="tiny">Last ~60 seconds</div>
+          </div>
+          <button id="clearWave" class="btn btn-ghost">Clear</button>
+        </div>
+        <canvas id="waveChart"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">Pulse Trend</div>
+            <div class="tiny">Last ~60 seconds</div>
+          </div>
+          <button id="clearPulse" class="btn btn-ghost">Clear</button>
+        </div>
+        <canvas id="pulseChart"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">Cry Level</div>
+            <div class="tiny">0.0 to 1.0</div>
+          </div>
+          <button id="clearCry" class="btn btn-ghost">Clear</button>
+        </div>
+        <canvas id="cryChart"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">Temperature</div>
+            <div class="tiny">Body temperature trend</div>
+          </div>
+          <button id="clearTemp" class="btn btn-ghost">Clear</button>
+        </div>
+        <canvas id="tempChart"></canvas>
+      </div>
+    </section>
+
+    <div class="card">
+      <div class="label">Notes</div>
+      <div class="tiny muted">
+        This is a hackathon prototype. Data can be simulated now; hardware sensor integration will send real values later through the same <code>/api/data</code> endpoint.
+      </div>
+    </div>
+  </main>
+
+<script>
+  // ------- Helpers -------
+  const $ = (id) => document.getElementById(id);
+
+  let acknowledgedUntil = 0;
+  $("ackBtn").onclick = () => {
+    acknowledgedUntil = Date.now() + 8000;
+    $("statusSub").textContent = "Alert acknowledged (silenced for 8s).";
+  };
+
+  function setConn(state) {
+    const badge = $("connBadge");
+    if (state === "ok") { badge.className="badge badge-ok"; badge.textContent="Connected"; }
+    else if (state === "stale") { badge.className="badge badge-warn"; badge.textContent="Stale data"; }
+    else { badge.className="badge badge-bad"; badge.textContent="Offline"; }
+  }
+
+  function updateLastUpdated(tsSeconds) {
+    const ageMs = Date.now() - (tsSeconds * 1000);
+    const ageSec = Math.max(0, ageMs / 1000);
+    $("lastUpdated").textContent = `Last update: ${ageSec.toFixed(1)}s ago`;
+    if (ageSec < 2) setConn("ok");
+    else if (ageSec < 6) setConn("stale");
+    else setConn("offline");
+  }
+
+  // ------- Charts setup -------
+  function makeChart(canvasId, label) {
+    const ctx = document.getElementById(canvasId).getContext("2d");
+    const labels = [];
+    const points = [];
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets: [{ label, data: points, borderWidth: 2, pointRadius: 0, tension: 0.25 }] },
+      options: { responsive: true, animation: false, scales: { x: { display:false }, y: { display:true } } }
+    });
+    return { labels, points, chart };
+  }
+
+  function pushPoint(series, tsSeconds, val, maxPoints=300) {
+    series.labels.push(new Date(tsSeconds * 1000).toLocaleTimeString());
+    series.points.push(val);
+    if (series.points.length > maxPoints) { series.labels.shift(); series.points.shift(); }
+    series.chart.update();
+  }
+
+  const waveSeries  = makeChart("waveChart", "Wave");
+  const pulseSeries = makeChart("pulseChart", "Pulse");
+  const crySeries   = makeChart("cryChart", "Cry level");
+  const tempSeries  = makeChart("tempChart", "Temp (°C)");
+
+  $("clearWave").onclick  = () => { waveSeries.labels.length=0; waveSeries.points.length=0; waveSeries.chart.update(); };
+  $("clearPulse").onclick = () => { pulseSeries.labels.length=0; pulseSeries.points.length=0; pulseSeries.chart.update(); };
+  $("clearCry").onclick   = () => { crySeries.labels.length=0; crySeries.points.length=0; crySeries.chart.update(); };
+  $("clearTemp").onclick  = () => { tempSeries.labels.length=0; tempSeries.points.length=0; tempSeries.chart.update(); };
+
+  // ------- Alert timer -------
+  let alertStartMs = null;
+  function updateAlertUI(isAlert) {
+    const silenced = Date.now() < acknowledgedUntil;
+    if (isAlert && !silenced) {
+      $("statusCard").className = "status status-alert";
+      $("statusText").textContent = "ALERT";
+      $("statusSub").textContent = "No breathing detected!";
+      if (alertStartMs === null) alertStartMs = Date.now();
+      const s = ((Date.now()-alertStartMs)/1000).toFixed(1);
+      $("alertTimer").textContent = `Breathing alert active for ${s}s`;
+    } else {
+      $("statusCard").className = "status status-ok";
+      $("statusText").textContent = "OK";
+      $("statusSub").textContent = "Monitoring…";
+      $("alertTimer").textContent = "No alert";
+      alertStartMs = null;
+    }
+  }
+
+  // ------- Poll loop -------
+  async function poll() {
+    try {
+      const r = await fetch("/api/latest", { cache: "no-store" });
+      const d = await r.json();
+
+      // metrics
+      $("bpm").textContent = isFinite(d.bpm) ? Math.round(d.bpm) : "--";
+      $("pulse").textContent = (d.pulse === null || d.pulse === undefined) ? "--" : Math.round(d.pulse);
+
+      // temp C + F
+      if (d.temp_c === null || d.temp_c === undefined) {
+        $("temp").textContent = "--";
+      } else {
+        const c = Number(d.temp_c);
+        const f = (c * 9/5) + 32;
+        $("temp").textContent = `${c.toFixed(1)}°C  (${f.toFixed(1)}°F)`;
+      }
+
+      // cry
+      const crying = !!d.crying;
+      $("crying").textContent = crying ? "CRYING" : "CALM";
+      $("crying").className = crying ? "metric small metric-bad" : "metric small metric-ok";
+      const lvl = (d.cry_level === null || d.cry_level === undefined) ? 0 : Number(d.cry_level);
+      $("cryLevel").textContent = lvl.toFixed(2);
+      $("cryBanner").textContent = `Cry: ${crying ? "Detected" : "Not detected"} (level ${lvl.toFixed(2)})`;
+
+      // charts (only push if ts exists)
+      if (typeof d.ts === "number") {
+        updateLastUpdated(d.ts);
+        pushPoint(waveSeries, d.ts, Number(d.wave));
+        if (d.pulse !== null && d.pulse !== undefined) pushPoint(pulseSeries, d.ts, Number(d.pulse));
+        pushPoint(crySeries, d.ts, lvl);
+        if (d.temp_c !== null && d.temp_c !== undefined) pushPoint(tempSeries, d.ts, Number(d.temp_c));
+      }
+
+      updateAlertUI(d.status === "ALERT");
+
+    } catch (e) {
+      setConn("offline");
+    } finally {
+      setTimeout(poll, 500);
+    }
+  }
+  poll();
+</script>
+</body>
+</html>
