@@ -10,58 +10,13 @@
 
   <style>
     .hidden { display: none !important; }
-
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.62);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-      padding: 16px;
-    }
-    .modal {
-      width: min(560px, 94vw);
-      background: #fff;
-      color: #111;
-      border-radius: 18px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
-      padding: 18px 18px 16px 18px;
-    }
-    .modal-title {
-      font-size: 20px;
-      font-weight: 800;
-      margin: 0 0 8px 0;
-    }
-    .modal-body {
-      font-size: 14px;
-      line-height: 1.45;
-      margin: 0 0 14px 0;
-      color: #222;
-    }
-    .modal-warning {
-      background: #fff7ed;
-      border: 1px solid #fed7aa;
-      border-radius: 12px;
-      padding: 10px 12px;
-      margin-bottom: 12px;
-      font-size: 13px;
-      color: #7c2d12;
-    }
-    .modal-actions {
-      display: flex;
-      gap: 10px;
-      justify-content: flex-end;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-top: 6px;
-    }
-    .btn-danger {
-      background: #dc2626;
-      border: 1px solid #b91c1c;
-      color: #fff;
-    }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.62); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 16px; }
+    .modal { width: min(560px, 94vw); background: #fff; color: #111; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 18px 18px 16px 18px; }
+    .modal-title { font-size: 20px; font-weight: 800; margin: 0 0 8px 0; }
+    .modal-body { font-size: 14px; line-height: 1.45; margin: 0 0 14px 0; color: #222; }
+    .modal-warning { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; color: #7c2d12; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    .btn-danger { background: #dc2626; border: 1px solid #b91c1c; color: #fff; }
     .btn-danger:hover { filter: brightness(0.95); }
   </style>
 </head>
@@ -70,18 +25,17 @@
   <header class="header">
     <div class="header-left">
       <div class="title">🍼 Baby Monitor</div>
-      <div class="subtitle">Movement + Temp + Humidity</div>
+      <div class="subtitle">Movement + Temp + Humidity + Cry</div>
     </div>
 
     <div class="header-right">
       <div id="connBadge" class="badge badge-warn">Connecting…</div>
       <div class="tiny" id="lastUpdated">Last update: --</div>
-      <div class="tiny muted" id="deviceId">Device: --</div>
+      <div class="tiny muted" id="deviceId">Devices: --</div>
     </div>
   </header>
 
   <main class="container">
-    <!-- STATUS -->
     <section id="statusCard" class="status status-ok">
       <div class="status-top">
         <div>
@@ -100,12 +54,12 @@
       <div class="status-bottom">
         <div class="mini" id="dropBanner">Drop: --</div>
         <div class="mini" id="faceDownBanner">Face down: --</div>
+        <div class="mini" id="cryBanner">Crying: --</div>
         <div class="mini" id="envBanner">Environment: --</div>
         <div class="mini" id="fallBanner">Fall/Heavy: --</div>
       </div>
     </section>
 
-    <!-- METRICS -->
     <section class="grid">
       <div class="card">
         <div class="label">Movement State</div>
@@ -128,13 +82,20 @@
       </div>
 
       <div class="card">
+        <div class="label">Baby Cry</div>
+        <div class="metric small" id="cryState">--</div>
+        <div class="tiny">
+          freq: <span id="cryFreq">--</span> Hz • vol: <span id="cryVol">--</span>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="label">Session</div>
         <div class="metric small" id="sessionTime">0:00</div>
         <div class="tiny">Time since dashboard opened</div>
       </div>
     </section>
 
-    <!-- CHARTS -->
     <section class="grid-2">
       <div class="card">
         <div class="card-head">
@@ -163,12 +124,10 @@
       <div class="label">Tip</div>
       <div class="tiny muted">
         Click <b>Enable Alerts</b> once to allow browser notifications + sound.
-        (Browsers block sound/notifications until you interact.)
       </div>
     </div>
   </main>
 
-  <!-- LATCHED ALERT MODAL -->
   <div id="alarmModalOverlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal">
       <h2 class="modal-title" id="alarmModalTitle">🚨 Alert</h2>
@@ -187,9 +146,6 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
-  // ----------------------------
-  // Session timer
-  // ----------------------------
   const startMs = Date.now();
   setInterval(() => {
     const s = Math.floor((Date.now() - startMs) / 1000);
@@ -198,35 +154,21 @@
     $("sessionTime").textContent = `${mm}:${ss}`;
   }, 500);
 
-  // ----------------------------
-  // Connection badge
-  // ----------------------------
   function setConn(state) {
-    if (state === "ok") {
-      $("connBadge").className = "badge badge-ok";
-      $("connBadge").textContent = "Connected";
-    } else if (state === "stale") {
-      $("connBadge").className = "badge badge-warn";
-      $("connBadge").textContent = "Stale data";
-    } else {
-      $("connBadge").className = "badge badge-bad";
-      $("connBadge").textContent = "Offline";
-    }
+    if (state === "ok") { $("connBadge").className = "badge badge-ok"; $("connBadge").textContent = "Connected"; }
+    else if (state === "stale") { $("connBadge").className = "badge badge-warn"; $("connBadge").textContent = "Stale data"; }
+    else { $("connBadge").className = "badge badge-bad"; $("connBadge").textContent = "Offline"; }
   }
 
   function updateLastUpdated(tsSeconds) {
     const ageMs = Date.now() - (tsSeconds * 1000);
     const ageSec = Math.max(0, ageMs / 1000);
     $("lastUpdated").textContent = `Last update: ${ageSec.toFixed(1)}s ago`;
-
     if (ageSec < 2.0) setConn("ok");
     else if (ageSec < 6.0) setConn("stale");
     else setConn("offline");
   }
 
-  // ----------------------------
-  // Chart helpers
-  // ----------------------------
   function makeChart(canvasId, label) {
     const ctx = document.getElementById(canvasId).getContext("2d");
     const labels = [];
@@ -249,12 +191,7 @@
   const moveSeries = makeChart("moveChart", "Avg move (g)");
   $("clearMove").onclick = () => { moveSeries.labels.length=0; moveSeries.points.length=0; moveSeries.chart.update(); };
 
-  // ----------------------------
-  // Notifications + continuous alarm (siren)
-  // ----------------------------
-  let audioCtx = null;
-  let alarmOn = false;
-  let sirenNodes = null;
+  let audioCtx = null, alarmOn = false, sirenNodes = null;
 
   function ensureAudioUnlocked() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -267,10 +204,8 @@
     if (!audioCtx) return;
 
     alarmOn = true;
-
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-
     osc.type = "sawtooth";
     osc.frequency.value = 700;
     gain.gain.value = 0.06;
@@ -288,44 +223,29 @@
 
     osc.start();
     lfo.start();
-
     sirenNodes = { osc, gain, lfo, lfoGain };
   }
 
   function stopSiren() {
     alarmOn = false;
     if (!sirenNodes) return;
-
     try { sirenNodes.osc.stop(); } catch(e) {}
     try { sirenNodes.lfo.stop(); } catch(e) {}
-
     try { sirenNodes.osc.disconnect(); } catch(e) {}
     try { sirenNodes.lfo.disconnect(); } catch(e) {}
     try { sirenNodes.gain.disconnect(); } catch(e) {}
     try { sirenNodes.lfoGain.disconnect(); } catch(e) {}
-
     sirenNodes = null;
   }
 
   async function requestAlertsPermission() {
     ensureAudioUnlocked();
-
-    if (!("Notification" in window)) {
-      $("alertHint").textContent = "Notifications not supported in this browser.";
-      return;
-    }
-
-    if (Notification.permission === "granted") {
-      $("alertHint").textContent = "Alerts enabled ✅";
-      return;
-    }
-
+    if (!("Notification" in window)) { $("alertHint").textContent = "Notifications not supported in this browser."; return; }
+    if (Notification.permission === "granted") { $("alertHint").textContent = "Alerts enabled ✅"; return; }
     const perm = await Notification.requestPermission();
-    if (perm === "granted") {
-      $("alertHint").textContent = "Alerts enabled ✅";
-    } else {
-      $("alertHint").textContent = "Notifications blocked. You can still get sound after clicking Enable Alerts.";
-    }
+    $("alertHint").textContent = (perm === "granted")
+      ? "Alerts enabled ✅"
+      : "Notifications blocked. You can still get sound after clicking Enable Alerts.";
   }
 
   $("enableAlertsBtn").onclick = requestAlertsPermission;
@@ -338,17 +258,11 @@
     const now = Date.now();
     if (now - lastNotifyMs < NOTIFY_COOLDOWN_MS) return;
     lastNotifyMs = now;
-
-    if ("Notification" in window && Notification.permission === "granted") {
-      new Notification(title, { body });
-    }
+    if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body });
   }
 
-  // ----------------------------
-  // LATCHED alarm logic (FALL OR FACE-DOWN)
-  // ----------------------------
   let alarmLatched = false;
-  let alarmReason = ""; // "FALL" | "FACE_DOWN"
+  let alarmReason = ""; // FALL | FACE_DOWN | CRY
   let suppressUntilMs = 0;
 
   function showAlarmModal(title, body) {
@@ -356,12 +270,9 @@
     $("alarmModalBody").textContent = body;
     $("alarmModalOverlay").classList.remove("hidden");
   }
+  function hideAlarmModal() { $("alarmModalOverlay").classList.add("hidden"); }
 
-  function hideAlarmModal() {
-    $("alarmModalOverlay").classList.add("hidden");
-  }
-
-  function latchAlarm(reason, { drop } = {}) {
+  function latchAlarm(reason, details = {}) {
     if (alarmLatched) return;
     if (Date.now() < suppressUntilMs) return;
 
@@ -369,16 +280,20 @@
     alarmReason = reason;
 
     let title = "🚨 Baby Monitor Alert";
-    let msg = "Safety alert detected. Please check on the baby immediately.";
+    let msg = "Safety alert detected. Please check immediately.";
 
     if (reason === "FALL") {
-      msg = drop
+      title = "🚨 Heavy Fall Detected";
+      msg = details.drop
         ? "DROP / free-fall was detected. Please check on the baby immediately."
         : "HEAVY movement / possible fall was detected. Please check on the baby immediately.";
-      title = "🚨 Heavy Fall Detected";
     } else if (reason === "FACE_DOWN") {
-      msg = "FACE-DOWN orientation was detected. Please check on the baby immediately.";
       title = "🚨 Face-Down Detected";
+      msg = "FACE-DOWN orientation was detected. Please check on the baby immediately.";
+    } else if (reason === "CRY") {
+      title = "🚨 Baby Cry Detected";
+      msg = "Baby crying was detected. Please check on the baby immediately.";
+      if (details.freq || details.vol) msg += ` (freq: ${details.freq ?? "--"} Hz, vol: ${details.vol ?? "--"})`;
     }
 
     showAlarmModal(title, msg + " Click “Turn Off Alarm” after you respond.");
@@ -386,7 +301,6 @@
     sendNotification("🚨 Baby Monitor Alert", msg);
 
     $("turnOffAlarmBtn").disabled = false;
-
     $("statusCard").className = "status status-alert";
     $("statusText").textContent = "ALERT";
     $("statusSub").textContent = "Alarm ON — a parent must turn it off.";
@@ -394,34 +308,27 @@
 
   function turnOffAlarm() {
     if (!alarmLatched) return;
-
     alarmLatched = false;
     alarmReason = "";
     suppressUntilMs = Date.now() + 15000;
-
     stopSiren();
     hideAlarmModal();
-
     $("turnOffAlarmBtn").disabled = true;
     $("statusSub").textContent = "Alarm turned off. Monitoring continues…";
   }
 
   $("turnOffAlarmBtn").onclick = turnOffAlarm;
   $("alarmModalOffBtn").onclick = turnOffAlarm;
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && alarmLatched) turnOffAlarm(); });
 
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && alarmLatched) turnOffAlarm();
-  });
-
-  function setSafetyUI({ heavyNow, drop, faceDown, envStatus }) {
+  function setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus }) {
     if (alarmLatched) {
       $("statusCard").className = "status status-alert";
       $("statusText").textContent = "ALERT";
       $("statusSub").textContent = "Alarm ON — a parent must turn it off.";
       return;
     }
-
-    const anyAlert = (heavyNow || drop || faceDown || envStatus === "ALERT");
+    const anyAlert = (heavyNow || drop || faceDown || cryDetected || envStatus === "ALERT");
     if (anyAlert) {
       $("statusCard").className = "status status-alert";
       $("statusText").textContent = "ALERT";
@@ -433,77 +340,79 @@
     }
   }
 
-  // ----------------------------
-  // Poll loop
-  // ----------------------------
   async function poll() {
     try {
       const r = await fetch("/api/latest", { cache: "no-store" });
-      const d = await r.json();
+      const data = await r.json();
 
-      if (typeof d.ts === "number") updateLastUpdated(d.ts);
-      $("deviceId").textContent = `Device: ${d.device_id ?? "--"}`;
+      const m = data.movement || {};
+      const a = data.audio || {};
 
-      const moveState = (d.movement_state ?? "UNKNOWN").toUpperCase();
+      const tsM = (typeof m.ts === "number") ? m.ts : 0;
+      const tsA = (typeof a.ts === "number") ? a.ts : 0;
+      const ts = Math.max(tsM, tsA);
+      if (ts > 0) updateLastUpdated(ts);
+
+      $("deviceId").textContent = `Devices: ${m.device_id ?? "movement"} + ${a.device_id ?? "cry_esp32"}`;
+
+      // movement
+      const moveState = (m.movement_state ?? "UNKNOWN").toUpperCase();
       $("moveState").textContent = moveState;
 
-      const avgMove = Number(d.avg_move_g ?? 0);
+      const avgMove = Number(m.avg_move_g ?? 0);
       $("avgMove").textContent = avgMove.toFixed(3);
-      $("lightCnt").textContent = d.light_events ?? 0;
-      $("heavyCnt").textContent = d.heavy_events ?? 0;
+      $("lightCnt").textContent = m.light_events ?? 0;
+      $("heavyCnt").textContent = m.heavy_events ?? 0;
 
-      if (typeof d.temp_c === "number") {
-        $("temp").textContent = `${d.temp_c.toFixed(1)} °C`;
-        if (typeof d.temp_f === "number") $("tempSub").textContent = `${d.temp_f.toFixed(1)} °F`;
-        else $("tempSub").textContent = "--";
+      const drop = !!m.drop;
+      const faceDown = !!m.face_down;
+
+      $("dropBanner").textContent = drop ? "Drop: DETECTED" : "Drop: none";
+      $("faceDownBanner").textContent = (alarmLatched && alarmReason === "FACE_DOWN")
+        ? "Face down: DETECTED (ACK REQUIRED)"
+        : (faceDown ? "Face down: DETECTED" : "Face down: none");
+
+      const heavyNow = (moveState === "HEAVY") || drop;
+      $("fallBanner").textContent = (alarmLatched && alarmReason === "FALL")
+        ? "Fall/Heavy: DETECTED (ACK REQUIRED)"
+        : (heavyNow ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none");
+
+      // env
+      if (typeof m.temp_c === "number") {
+        $("temp").textContent = `${m.temp_c.toFixed(1)} °C`;
+        $("tempSub").textContent = (typeof m.temp_f === "number") ? `${m.temp_f.toFixed(1)} °F` : "--";
       } else {
         $("temp").textContent = "--";
         $("tempSub").textContent = "--";
       }
 
-      if (typeof d.humidity === "number") $("humidity").textContent = `${d.humidity.toFixed(1)} %`;
-      else $("humidity").textContent = "--";
+      $("humidity").textContent = (typeof m.humidity === "number") ? `${m.humidity.toFixed(1)} %` : "--";
 
-      const envStatus = (d.env_status ?? "OK").toUpperCase();
+      const envStatus = (m.env_status ?? "OK").toUpperCase();
       $("envStatus").textContent = envStatus;
-      if (envStatus === "ALERT") {
-        $("envStatus").style.color = "#dc2626";
-        $("envBanner").textContent = "Environment: ALERT";
-      } else {
-        $("envStatus").style.color = "";
-        $("envBanner").textContent = "Environment: OK";
-      }
+      $("envBanner").textContent = (envStatus === "ALERT") ? "Environment: ALERT" : "Environment: OK";
 
-      const drop = !!d.drop;
-      const faceDown = !!d.face_down;
+      // audio
+      const cryDetected = !!a.cry_detected;
+      const cryFreq = (typeof a.cry_freq_hz === "number") ? a.cry_freq_hz : null;
+      const cryVol = (typeof a.cry_volume === "number") ? a.cry_volume : null;
 
-      $("dropBanner").textContent = drop ? "Drop: DETECTED" : "Drop: none";
+      $("cryState").textContent = cryDetected ? "CRYING" : "Quiet";
+      $("cryFreq").textContent = cryFreq ? String(Math.round(cryFreq)) : "--";
+      $("cryVol").textContent = cryVol ? String(Math.round(cryVol)) : "--";
 
-      // show ACK REQUIRED when latched
-      if (alarmLatched && alarmReason === "FACE_DOWN") {
-        $("faceDownBanner").textContent = "Face down: DETECTED (ACK REQUIRED)";
-      } else {
-        $("faceDownBanner").textContent = faceDown ? "Face down: DETECTED" : "Face down: none";
-      }
+      $("cryBanner").textContent = (alarmLatched && alarmReason === "CRY")
+        ? "Crying: DETECTED (ACK REQUIRED)"
+        : (cryDetected ? "Crying: DETECTED" : "Crying: none");
 
-      const heavyNow = (moveState === "HEAVY") || drop;
+      // latch priority
+      if (heavyNow) latchAlarm("FALL", { drop });
+      else if (faceDown) latchAlarm("FACE_DOWN");
+      else if (cryDetected) latchAlarm("CRY", { freq: cryFreq ? Math.round(cryFreq) : null, vol: cryVol ? Math.round(cryVol) : null });
 
-      if (alarmLatched && alarmReason === "FALL") {
-        $("fallBanner").textContent = "Fall/Heavy: DETECTED (ACK REQUIRED)";
-      } else {
-        $("fallBanner").textContent = heavyNow ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none";
-      }
+      setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus });
 
-      // Latch alarm for FALL or FACE-DOWN
-      if (heavyNow) {
-        latchAlarm("FALL", { drop });
-      } else if (faceDown) {
-        latchAlarm("FACE_DOWN");
-      }
-
-      setSafetyUI({ heavyNow, drop, faceDown, envStatus });
-
-      if (typeof d.ts === "number") pushPoint(moveSeries, d.ts, avgMove);
+      if (tsM > 0) pushPoint(moveSeries, tsM, avgMove);
 
     } catch (e) {
       setConn("offline");

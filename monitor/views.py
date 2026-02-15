@@ -3,7 +3,8 @@ import time
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from .state import latest
+
+from .state import latest_movement, latest_audio
 
 
 def index(request):
@@ -11,7 +12,10 @@ def index(request):
 
 
 def api_latest(request):
-    return JsonResponse(latest)
+    return JsonResponse({
+        "movement": latest_movement,
+        "audio": latest_audio,
+    })
 
 
 def _parse_boolish(val, field_name="field"):
@@ -34,68 +38,100 @@ def api_data(request):
     except Exception:
         return HttpResponseBadRequest("Invalid JSON")
 
-    latest["ts"] = time.time()
+    device_id = str(body.get("device_id", "")).strip() or "unknown"
+    now_ts = time.time()
 
-    if "device_id" in body:
-        latest["device_id"] = str(body["device_id"])
+    # ----------------------------
+    # MOVEMENT DEVICE (Arduino)
+    # ----------------------------
+    if device_id == "movement_arduino":
+        latest_movement["ts"] = now_ts
+        latest_movement["device_id"] = device_id
 
-    # movement
-    if "movement_state" in body:
-        latest["movement_state"] = str(body["movement_state"]).upper()
+        if "movement_state" in body:
+            latest_movement["movement_state"] = str(body["movement_state"]).upper()
 
-    if "avg_move_g" in body:
-        try:
-            latest["avg_move_g"] = float(body["avg_move_g"])
-        except Exception:
-            return HttpResponseBadRequest("avg_move_g must be a number")
+        if "avg_move_g" in body:
+            try:
+                latest_movement["avg_move_g"] = float(body["avg_move_g"])
+            except Exception:
+                return HttpResponseBadRequest("avg_move_g must be a number")
 
-    if "light_events" in body:
-        try:
-            latest["light_events"] = int(body["light_events"])
-        except Exception:
-            return HttpResponseBadRequest("light_events must be an int")
+        if "light_events" in body:
+            try:
+                latest_movement["light_events"] = int(body["light_events"])
+            except Exception:
+                return HttpResponseBadRequest("light_events must be an int")
 
-    if "heavy_events" in body:
-        try:
-            latest["heavy_events"] = int(body["heavy_events"])
-        except Exception:
-            return HttpResponseBadRequest("heavy_events must be an int")
+        if "heavy_events" in body:
+            try:
+                latest_movement["heavy_events"] = int(body["heavy_events"])
+            except Exception:
+                return HttpResponseBadRequest("heavy_events must be an int")
 
-    if "drop" in body:
-        try:
-            latest["drop"] = _parse_boolish(body["drop"], "drop")
-        except Exception as e:
-            return HttpResponseBadRequest(str(e))
+        if "drop" in body:
+            try:
+                latest_movement["drop"] = _parse_boolish(body["drop"], "drop")
+            except Exception as e:
+                return HttpResponseBadRequest(str(e))
 
-    if "face_down" in body:
-        try:
-            latest["face_down"] = _parse_boolish(body["face_down"], "face_down")
-        except Exception as e:
-            return HttpResponseBadRequest(str(e))
+        if "face_down" in body:
+            try:
+                latest_movement["face_down"] = _parse_boolish(body["face_down"], "face_down")
+            except Exception as e:
+                return HttpResponseBadRequest(str(e))
 
-    # environment
-    if "temp_c" in body:
-        try:
-            latest["temp_c"] = float(body["temp_c"])
-        except Exception:
-            return HttpResponseBadRequest("temp_c must be a number")
+        if "temp_c" in body:
+            try:
+                latest_movement["temp_c"] = float(body["temp_c"])
+            except Exception:
+                return HttpResponseBadRequest("temp_c must be a number")
 
-    if "temp_f" in body:
-        try:
-            latest["temp_f"] = float(body["temp_f"])
-        except Exception:
-            return HttpResponseBadRequest("temp_f must be a number")
+        if "temp_f" in body:
+            try:
+                latest_movement["temp_f"] = float(body["temp_f"])
+            except Exception:
+                return HttpResponseBadRequest("temp_f must be a number")
 
-    if "humidity" in body:
-        try:
-            latest["humidity"] = float(body["humidity"])
-        except Exception:
-            return HttpResponseBadRequest("humidity must be a number")
+        if "humidity" in body:
+            try:
+                latest_movement["humidity"] = float(body["humidity"])
+            except Exception:
+                return HttpResponseBadRequest("humidity must be a number")
 
-    if "env_status" in body:
-        s = str(body["env_status"]).upper()
-        if s not in ("OK", "ALERT"):
-            return HttpResponseBadRequest("env_status must be OK or ALERT")
-        latest["env_status"] = s
+        if "env_status" in body:
+            s = str(body["env_status"]).upper()
+            if s not in ("OK", "ALERT"):
+                return HttpResponseBadRequest("env_status must be OK or ALERT")
+            latest_movement["env_status"] = s
 
-    return JsonResponse({"ok": True})
+        return JsonResponse({"ok": True, "device": "movement"})
+
+    # ----------------------------
+    # AUDIO DEVICE (ESP32)
+    # ----------------------------
+    if device_id == "cry_esp32":
+        latest_audio["ts"] = now_ts
+        latest_audio["device_id"] = device_id
+
+        if "cry_detected" in body:
+            try:
+                latest_audio["cry_detected"] = _parse_boolish(body["cry_detected"], "cry_detected")
+            except Exception as e:
+                return HttpResponseBadRequest(str(e))
+
+        if "cry_freq_hz" in body:
+            try:
+                latest_audio["cry_freq_hz"] = float(body["cry_freq_hz"])
+            except Exception:
+                return HttpResponseBadRequest("cry_freq_hz must be a number")
+
+        if "cry_volume" in body:
+            try:
+                latest_audio["cry_volume"] = float(body["cry_volume"])
+            except Exception:
+                return HttpResponseBadRequest("cry_volume must be a number")
+
+        return JsonResponse({"ok": True, "device": "audio"})
+
+    return HttpResponseBadRequest("Unknown device_id")
