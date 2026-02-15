@@ -18,7 +18,7 @@ WiFiClient wifi;
 HttpClient client(wifi, SERVER_IP, SERVER_PORT);
 
 // -------------------- DHT22 --------------------
-const int pinDHT22 = 5;          // DHT22 data pin (D5)
+const int pinDHT22 = 5;
 SimpleDHT22 dht22(pinDHT22);
 
 float temperatureC = NAN;
@@ -43,10 +43,6 @@ const float FREEFALL_G   = 0.30;
 
 const unsigned long WINDOW_MS = 1000;
 
-const float STILL_DYN_G = 0.05;
-const float FACE_DOWN_ROLL_DEG = 60.0;
-const unsigned long FACE_DOWN_HOLD_MS = 5000;
-
 float baseline = 1.0;
 unsigned long windowStart = 0;
 
@@ -61,7 +57,12 @@ bool freeFallNow = false;
 unsigned long freeFallStart = 0;
 bool dropDetectedThisWindow = false;
 
-// face-down detection (hold)
+// -------------------- FACE-DOWN (AZ BASED) --------------------
+// Board is "facing up" when pins touch the table.
+// That means az is ~ +1g when safe, ~ -1g when flipped face-down.
+const float FACE_DOWN_AZ_THRESH = -0.75;     // tune: -0.6 to -0.85
+const unsigned long FACE_DOWN_HOLD_MS = 2000; // 2s hold for quick alert
+
 bool faceDownNow = false;
 unsigned long faceDownStart = 0;
 bool faceDownDetectedThisWindow = false;
@@ -92,7 +93,6 @@ void postToServer(const char* moveState, float avgDyn, int lightCnt, int heavyCn
   String json = "{";
   json += "\"device_id\":\"movement_arduino\",";
 
-  // movement
   json += "\"movement_state\":\"" + String(moveState) + "\",";
   json += "\"avg_move_g\":" + String(avgDyn, 3) + ",";
   json += "\"light_events\":" + String(lightCnt) + ",";
@@ -100,29 +100,26 @@ void postToServer(const char* moveState, float avgDyn, int lightCnt, int heavyCn
   json += "\"drop\":" + boolToJson(drop) + ",";
   json += "\"face_down\":" + boolToJson(faceDown) + ",";
 
-  // environment
   if (!isnan(tc)) json += "\"temp_c\":" + String(tc, 2) + ",";
   if (!isnan(tf)) json += "\"temp_f\":" + String(tf, 2) + ",";
   if (!isnan(hum)) json += "\"humidity\":" + String(hum, 2) + ",";
   json += "\"env_status\":\"" + String(envStatus) + "\"";
-
   json += "}";
 
   client.beginRequest();
   client.post(POST_PATH);
   client.sendHeader("Content-Type", "application/json");
+  client.sendHeader("Connection", "close");            // helps avoid stalls
   client.sendHeader("Content-Length", json.length());
   client.beginBody();
   client.print(json);
   client.endRequest();
 
   int statusCode = client.responseStatusCode();
-  String resp = client.responseBody();
+  client.skipResponseHeaders(); // do NOT read body (faster)
 
   Serial.print("POST status=");
-  Serial.print(statusCode);
-  Serial.print(" body=");
-  Serial.println(resp);
+  Serial.println(statusCode);
 }
 
 // -------------------- SETUP --------------------
@@ -160,14 +157,6 @@ void loop() {
       humidity = NAN;
     } else {
       temperatureF = temperatureC * 1.8 + 32.0;
-
-      Serial.print("Temp: ");
-      Serial.print(temperatureC, 2);
-      Serial.print(" C (");
-      Serial.print(temperatureF, 2);
-      Serial.print(" F)  |  Humidity: ");
-      Serial.print(humidity, 2);
-      Serial.println(" %");
     }
   }
 
@@ -185,9 +174,6 @@ void loop() {
   if (dyn > HEAVY_MOVE_G) heavyEvents++;
   else if (dyn > LIGHT_MOVE_G) lightEvents++;
 
-  // Orientation estimate
-  float rollDeg  = atan2(ay, az) * 57.2958;
-
   // ---- Drop detection ----
   if (amag < FREEFALL_G) {
     if (!freeFallNow) {
@@ -202,29 +188,30 @@ void loop() {
     freeFallNow = false;
   }
 
+  // ---- Face-down detection (AZ sign + HOLD) ----
+  // safe/up: az ~ +1.0, face-down: az ~ -1.0
+  bool faceDownInstant = (az < FACE_DOWN_AZ_THRESH);
+
+  if (faceDownInstant) {
+    if (!faceDownNow) {
+      faceDownNow = true;
+      faceDownStart = now;
+    } else if (now - faceDownStart >= FACE_DOWN_HOLD_MS) {
+      faceDownDetectedThisWindow = true;
+      Serial.println("ALERT: FACE-DOWN detected!");
+      faceDownStart = now; // cooldown so it doesn't spam every loop
+    }
+  } else {
+    faceDownNow = false;
+  }
+
   // ---- Report once per WINDOW_MS ----
   if (now - windowStart >= WINDOW_MS) {
     float avgDyn = (samples > 0) ? (dynSum / samples) : 0.0;
 
-    // Movement state
     const char* state = "STILL";
     if (avgDyn > HEAVY_MOVE_G) state = "HEAVY";
     else if (avgDyn > LIGHT_MOVE_G) state = "LIGHT";
-
-    // Face-down logic (hold)
-    bool faceDown = (fabs(rollDeg) > FACE_DOWN_ROLL_DEG);
-    if (avgDyn < STILL_DYN_G && faceDown) {
-      if (!faceDownNow) {
-        faceDownNow = true;
-        faceDownStart = now;
-      } else if (now - faceDownStart >= FACE_DOWN_HOLD_MS) {
-        faceDownDetectedThisWindow = true;
-        Serial.println("ALERT: Face-down/stomach orientation detected!");
-        faceDownStart = now; // cooldown
-      }
-    } else {
-      faceDownNow = false;
-    }
 
     // Environment status
     const char* envStatus = "OK";
