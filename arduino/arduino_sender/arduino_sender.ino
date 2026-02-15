@@ -1,12 +1,15 @@
 #include <Arduino_LSM6DS3.h>
+#include <SimpleDHT.h>
+
 #include <WiFiNINA.h>
 #include <ArduinoHttpClient.h>
 #include <math.h>
 
+// -------------------- WIFI --------------------
 const char* WIFI_SSID = "James Iphone";
 const char* WIFI_PASS = "james123";
 
-// your laptop IP on hotspot (from ipconfig)
+// PUT YOUR LAPTOP IP HERE (from ipconfig on hotspot)
 const char* SERVER_IP = "172.20.10.3";
 const int   SERVER_PORT = 8000;
 const char* POST_PATH = "/api/data";
@@ -14,30 +17,62 @@ const char* POST_PATH = "/api/data";
 WiFiClient wifi;
 HttpClient client(wifi, SERVER_IP, SERVER_PORT);
 
-// ---- IMU movement code ----
+// -------------------- DHT22 --------------------
+const int pinDHT22 = 5;          // DHT22 data pin (D5)
+SimpleDHT22 dht22(pinDHT22);
+
+float temperatureC = NAN;
+float temperatureF = NAN;
+float humidity = NAN;
+
+unsigned long prevDhtMillis = 0;
+const unsigned long DHT_INTERVAL_MS = 1000;
+
+// Abnormal thresholds
+const float TEMP_HIGH_C = 26.0;
+const float TEMP_LOW_C  = 18.0;
+const float HUM_HIGH    = 70.0;
+const float HUM_LOW     = 30.0;
+
+// -------------------- IMU --------------------
 float ax, ay, az, gx, gy, gz;
 
 const float LIGHT_MOVE_G = 0.08;
 const float HEAVY_MOVE_G = 0.25;
 const float FREEFALL_G   = 0.30;
+
 const unsigned long WINDOW_MS = 1000;
+
+const float STILL_DYN_G = 0.05;
+const float FACE_DOWN_ROLL_DEG = 60.0;
+const unsigned long FACE_DOWN_HOLD_MS = 5000;
 
 float baseline = 1.0;
 unsigned long windowStart = 0;
 
 int lightEvents = 0;
 int heavyEvents = 0;
-bool freeFallNow = false;
-unsigned long freeFallStart = 0;
 
 float dynSum = 0;
 int samples = 0;
 
+// drop detection
+bool freeFallNow = false;
+unsigned long freeFallStart = 0;
 bool dropDetectedThisWindow = false;
 
+// face-down detection (hold)
+bool faceDownNow = false;
+unsigned long faceDownStart = 0;
+bool faceDownDetectedThisWindow = false;
+
+// -------------------- WIFI HELPERS --------------------
 void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+
   Serial.print("Connecting WiFi");
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(300);
     Serial.print(".");
@@ -47,15 +82,30 @@ void connectWiFi() {
   Serial.println(WiFi.localIP());
 }
 
-void postMovement(const char* state, float avgDyn, int lightCnt, int heavyCnt, bool drop) {
-  // Build JSON
+String boolToJson(bool b) { return b ? "true" : "false"; }
+
+// -------------------- POST TO DJANGO --------------------
+void postToServer(const char* moveState, float avgDyn, int lightCnt, int heavyCnt,
+                  bool drop, bool faceDown,
+                  float tc, float tf, float hum, const char* envStatus) {
+
   String json = "{";
   json += "\"device_id\":\"movement_arduino\",";
-  json += "\"movement_state\":\"" + String(state) + "\",";
+
+  // movement
+  json += "\"movement_state\":\"" + String(moveState) + "\",";
   json += "\"avg_move_g\":" + String(avgDyn, 3) + ",";
   json += "\"light_events\":" + String(lightCnt) + ",";
   json += "\"heavy_events\":" + String(heavyCnt) + ",";
-  json += "\"drop\":" + String(drop ? "true" : "false");
+  json += "\"drop\":" + boolToJson(drop) + ",";
+  json += "\"face_down\":" + boolToJson(faceDown) + ",";
+
+  // environment
+  if (!isnan(tc)) json += "\"temp_c\":" + String(tc, 2) + ",";
+  if (!isnan(tf)) json += "\"temp_f\":" + String(tf, 2) + ",";
+  if (!isnan(hum)) json += "\"humidity\":" + String(hum, 2) + ",";
+  json += "\"env_status\":\"" + String(envStatus) + "\"";
+
   json += "}";
 
   client.beginRequest();
@@ -75,6 +125,7 @@ void postMovement(const char* state, float avgDyn, int lightCnt, int heavyCnt, b
   Serial.println(resp);
 }
 
+// -------------------- SETUP --------------------
 void setup() {
   Serial.begin(115200);
   while (!Serial) {}
@@ -87,21 +138,46 @@ void setup() {
   connectWiFi();
 
   windowStart = millis();
-  Serial.println("Sleep movement tracker running...");
+  Serial.println("Movement + Temp/Humidity tracker running...");
 }
 
+// -------------------- LOOP --------------------
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+  connectWiFi();
+
+  unsigned long now = millis();
+
+  // ---- Read DHT every 1s ----
+  if (now - prevDhtMillis >= DHT_INTERVAL_MS) {
+    prevDhtMillis = now;
+
+    int err = dht22.read2(&temperatureC, &humidity, NULL);
+    if (err != SimpleDHTErrSuccess) {
+      Serial.print("DHT22 read failed, err=");
+      Serial.println(err);
+      temperatureC = NAN;
+      temperatureF = NAN;
+      humidity = NAN;
+    } else {
+      temperatureF = temperatureC * 1.8 + 32.0;
+
+      Serial.print("Temp: ");
+      Serial.print(temperatureC, 2);
+      Serial.print(" C (");
+      Serial.print(temperatureF, 2);
+      Serial.print(" F)  |  Humidity: ");
+      Serial.print(humidity, 2);
+      Serial.println(" %");
+    }
   }
 
+  // ---- Read IMU ----
   if (IMU.accelerationAvailable()) IMU.readAcceleration(ax, ay, az);
   if (IMU.gyroscopeAvailable())    IMU.readGyroscope(gx, gy, gz);
 
   float amag = sqrt(ax*ax + ay*ay + az*az);
 
   baseline = 0.98 * baseline + 0.02 * amag;
-
   float dyn = fabs(amag - baseline);
   dynSum += dyn;
   samples++;
@@ -109,7 +185,10 @@ void loop() {
   if (dyn > HEAVY_MOVE_G) heavyEvents++;
   else if (dyn > LIGHT_MOVE_G) lightEvents++;
 
-  unsigned long now = millis();
+  // Orientation estimate
+  float rollDeg  = atan2(ay, az) * 57.2958;
+
+  // ---- Drop detection ----
   if (amag < FREEFALL_G) {
     if (!freeFallNow) {
       freeFallNow = true;
@@ -123,26 +202,54 @@ void loop() {
     freeFallNow = false;
   }
 
+  // ---- Report once per WINDOW_MS ----
   if (now - windowStart >= WINDOW_MS) {
     float avgDyn = (samples > 0) ? (dynSum / samples) : 0.0;
 
+    // Movement state
     const char* state = "STILL";
     if (avgDyn > HEAVY_MOVE_G) state = "HEAVY";
     else if (avgDyn > LIGHT_MOVE_G) state = "LIGHT";
 
+    // Face-down logic (hold)
+    bool faceDown = (fabs(rollDeg) > FACE_DOWN_ROLL_DEG);
+    if (avgDyn < STILL_DYN_G && faceDown) {
+      if (!faceDownNow) {
+        faceDownNow = true;
+        faceDownStart = now;
+      } else if (now - faceDownStart >= FACE_DOWN_HOLD_MS) {
+        faceDownDetectedThisWindow = true;
+        Serial.println("ALERT: Face-down/stomach orientation detected!");
+        faceDownStart = now; // cooldown
+      }
+    } else {
+      faceDownNow = false;
+    }
+
+    // Environment status
+    const char* envStatus = "OK";
+    if (!isnan(temperatureC) && (temperatureC > TEMP_HIGH_C || temperatureC < TEMP_LOW_C)) envStatus = "ALERT";
+    if (!isnan(humidity) && (humidity > HUM_HIGH || humidity < HUM_LOW)) envStatus = "ALERT";
+
     Serial.print("state=");
     Serial.print(state);
-    Serial.print(" avgMove(g)=");
+    Serial.print(" avgMove=");
     Serial.print(avgDyn, 3);
-    Serial.print(" lightCounts=");
+    Serial.print(" light=");
     Serial.print(lightEvents);
-    Serial.print(" heavyCounts=");
+    Serial.print(" heavy=");
     Serial.print(heavyEvents);
     Serial.print(" drop=");
-    Serial.println(dropDetectedThisWindow ? "true" : "false");
+    Serial.print(dropDetectedThisWindow ? "true" : "false");
+    Serial.print(" faceDown=");
+    Serial.println(faceDownDetectedThisWindow ? "true" : "false");
 
-    // Send to Django
-    postMovement(state, avgDyn, lightEvents, heavyEvents, dropDetectedThisWindow);
+    // POST to Django
+    postToServer(
+      state, avgDyn, lightEvents, heavyEvents,
+      dropDetectedThisWindow, faceDownDetectedThisWindow,
+      temperatureC, temperatureF, humidity, envStatus
+    );
 
     // reset window stats
     windowStart = now;
@@ -151,6 +258,7 @@ void loop() {
     lightEvents = 0;
     heavyEvents = 0;
     dropDetectedThisWindow = false;
+    faceDownDetectedThisWindow = false;
   }
 
   delay(20);

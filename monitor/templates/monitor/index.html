@@ -13,7 +13,7 @@
   <header class="header">
     <div class="header-left">
       <div class="title">🍼 Baby Monitor</div>
-      <div class="subtitle">Breathing + Movement (multi-device ready)</div>
+      <div class="subtitle">Movement + Temp + Humidity</div>
     </div>
 
     <div class="header-right">
@@ -28,7 +28,7 @@
     <section id="statusCard" class="status status-ok">
       <div class="status-top">
         <div>
-          <div class="label">Breathing Status</div>
+          <div class="label">Safety Status</div>
           <div id="statusText" class="status-text">OK</div>
           <div id="statusSub" class="tiny">Waiting for data…</div>
         </div>
@@ -36,33 +36,34 @@
           <button id="ackBtn" class="btn">Acknowledge</button>
         </div>
       </div>
+
       <div class="status-bottom">
-        <div class="mini" id="alertTimer">No alert</div>
         <div class="mini" id="dropBanner">Drop: --</div>
+        <div class="mini" id="faceDownBanner">Face down: --</div>
+        <div class="mini" id="envBanner">Environment: --</div>
       </div>
     </section>
 
     <!-- METRICS -->
     <section class="grid">
       <div class="card">
-        <div class="label">Breaths / min</div>
-        <div class="metric" id="bpm">--</div>
-        <div class="tiny">From breathing device</div>
-      </div>
-
-      <div class="card">
-        <div class="label">Breathing Wave</div>
-        <div class="metric" id="wave">--</div>
-        <div class="tiny">Raw / filtered</div>
-      </div>
-
-      <div class="card">
         <div class="label">Movement State</div>
         <div class="metric small" id="moveState">--</div>
         <div class="tiny">
           avg: <span id="avgMove">--</span> g • light: <span id="lightCnt">--</span> • heavy: <span id="heavyCnt">--</span>
         </div>
-        <div class="tiny" id="dropBadge"></div>
+      </div>
+
+      <div class="card">
+        <div class="label">Temperature</div>
+        <div class="metric small" id="temp">--</div>
+        <div class="tiny muted" id="tempSub">--</div>
+      </div>
+
+      <div class="card">
+        <div class="label">Humidity</div>
+        <div class="metric small" id="humidity">--</div>
+        <div class="tiny muted">Relative humidity</div>
       </div>
 
       <div class="card">
@@ -77,17 +78,6 @@
       <div class="card">
         <div class="card-head">
           <div>
-            <div class="label">Breathing Waveform</div>
-            <div class="tiny">Last ~60 seconds</div>
-          </div>
-          <button id="clearWave" class="btn btn-ghost">Clear</button>
-        </div>
-        <canvas id="waveChart"></canvas>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <div>
             <div class="label">Movement Trend</div>
             <div class="tiny">avg movement (g)</div>
           </div>
@@ -95,13 +85,23 @@
         </div>
         <canvas id="moveChart"></canvas>
       </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <div class="label">Environment Status</div>
+            <div class="tiny">OK / ALERT</div>
+          </div>
+        </div>
+        <div class="metric small" id="envStatus">--</div>
+        <div class="tiny muted">Based on temperature/humidity thresholds</div>
+      </div>
     </section>
 
     <div class="card">
       <div class="label">Tip</div>
       <div class="tiny muted">
-        Your Nano 33 IoT can POST movement data to <code>/api/data</code>. Your ESP32 can POST breathing data to the same endpoint.
-        The dashboard always shows the latest values received.
+        Arduino posts to <code>/api/data</code> with movement + temp + humidity.
       </div>
     </div>
   </main>
@@ -109,11 +109,11 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
-  // --- acknowledge alert for 8s ---
+  // --- acknowledge warnings for 8s ---
   let acknowledgedUntil = 0;
   $("ackBtn").onclick = () => {
     acknowledgedUntil = Date.now() + 8000;
-    $("statusSub").textContent = "Alert acknowledged (silenced for 8s).";
+    $("statusSub").textContent = "Warnings acknowledged (silenced for 8s).";
   };
 
   // --- session timer ---
@@ -149,7 +149,7 @@
     else setConn("offline");
   }
 
-  // --- charts helpers ---
+  // --- chart helpers ---
   function makeChart(canvasId, label) {
     const ctx = document.getElementById(canvasId).getContext("2d");
     const labels = [];
@@ -169,30 +169,21 @@
     series.chart.update();
   }
 
-  const waveSeries = makeChart("waveChart", "Wave");
   const moveSeries = makeChart("moveChart", "Avg move (g)");
-
-  $("clearWave").onclick = () => { waveSeries.labels.length=0; waveSeries.points.length=0; waveSeries.chart.update(); };
   $("clearMove").onclick = () => { moveSeries.labels.length=0; moveSeries.points.length=0; moveSeries.chart.update(); };
 
-  // --- alert timer ---
-  let alertStartMs = null;
-  function updateAlertUI(isAlert) {
+  function setSafetyUI(drop, faceDown, envStatus) {
     const silenced = Date.now() < acknowledgedUntil;
+    const anyAlert = (!!drop || !!faceDown || (envStatus === "ALERT"));
 
-    if (isAlert && !silenced) {
+    if (anyAlert && !silenced) {
       $("statusCard").className = "status status-alert";
       $("statusText").textContent = "ALERT";
-      $("statusSub").textContent = "No breathing detected!";
-      if (alertStartMs === null) alertStartMs = Date.now();
-      const s = ((Date.now()-alertStartMs)/1000).toFixed(1);
-      $("alertTimer").textContent = `Breathing alert active for ${s}s`;
+      $("statusSub").textContent = "Safety warning detected!";
     } else {
       $("statusCard").className = "status status-ok";
       $("statusText").textContent = "OK";
       $("statusSub").textContent = "Monitoring…";
-      $("alertTimer").textContent = "No alert";
-      alertStartMs = null;
     }
   }
 
@@ -202,48 +193,57 @@
       const r = await fetch("/api/latest", { cache: "no-store" });
       const d = await r.json();
 
-      const b = d.breathing || {};
-      const m = d.movement || {};
+      if (typeof d.ts === "number") updateLastUpdated(d.ts);
 
-      // IMPORTANT: connection uses BREATHING timestamp (critical sensor)
-      if (typeof b.ts === "number") updateLastUpdated(b.ts);
-      else setConn("offline");
+      $("deviceId").textContent = `Device: ${d.device_id ?? "--"}`;
 
-      $("deviceId").textContent = `Breathing: ${b.device_id ?? "--"} • Movement: ${m.device_id ?? "--"}`;
-
-      // breathing metrics
-      $("bpm").textContent  = (b.bpm ?? 0) ? Math.round(b.bpm) : "--";
-      $("wave").textContent = (b.wave ?? 0) ? Math.round(b.wave) : "--";
-
-      // movement metrics
-      const ms = (m.movement_state ?? "UNKNOWN").toUpperCase();
-      $("moveState").textContent = ms;
-
-      const avgMove = Number(m.avg_move_g ?? 0);
+      // movement
+      $("moveState").textContent = (d.movement_state ?? "UNKNOWN").toUpperCase();
+      const avgMove = Number(d.avg_move_g ?? 0);
       $("avgMove").textContent = avgMove.toFixed(3);
-      $("lightCnt").textContent = m.light_events ?? 0;
-      $("heavyCnt").textContent = m.heavy_events ?? 0;
+      $("lightCnt").textContent = d.light_events ?? 0;
+      $("heavyCnt").textContent = d.heavy_events ?? 0;
 
-      // drop UI (movement)
-      if (m.drop) {
-        $("dropBadge").textContent = "⚠️ DROP detected!";
-        $("dropBadge").style.color = "#dc2626";
-        $("dropBanner").textContent = "Drop: DETECTED";
+      // temperature
+      if (typeof d.temp_c === "number") {
+        $("temp").textContent = `${d.temp_c.toFixed(1)} °C`;
+        if (typeof d.temp_f === "number") $("tempSub").textContent = `${d.temp_f.toFixed(1)} °F`;
+        else $("tempSub").textContent = "--";
       } else {
-        $("dropBadge").textContent = "";
-        $("dropBanner").textContent = "Drop: none";
+        $("temp").textContent = "--";
+        $("tempSub").textContent = "--";
       }
 
-      // charts
-      if (typeof b.ts === "number" && b.wave !== undefined && b.wave !== null) {
-        pushPoint(waveSeries, b.ts, Number(b.wave));
-      }
-      if (typeof m.ts === "number") {
-        pushPoint(moveSeries, m.ts, avgMove);
+      // humidity
+      if (typeof d.humidity === "number") {
+        $("humidity").textContent = `${d.humidity.toFixed(1)} %`;
+      } else {
+        $("humidity").textContent = "--";
       }
 
-      // breathing alert
-      updateAlertUI(b.status === "ALERT");
+      // environment status
+      const envStatus = (d.env_status ?? "OK").toUpperCase();
+      $("envStatus").textContent = envStatus;
+      if (envStatus === "ALERT") {
+        $("envStatus").style.color = "#dc2626";
+        $("envBanner").textContent = "Environment: ALERT";
+      } else {
+        $("envStatus").style.color = "";
+        $("envBanner").textContent = "Environment: OK";
+      }
+
+      // drop + face down banners
+      if (d.drop) $("dropBanner").textContent = "Drop: DETECTED";
+      else $("dropBanner").textContent = "Drop: none";
+
+      if (d.face_down) $("faceDownBanner").textContent = "Face down: DETECTED";
+      else $("faceDownBanner").textContent = "Face down: none";
+
+      // safety UI
+      setSafetyUI(!!d.drop, !!d.face_down, envStatus);
+
+      // chart
+      if (typeof d.ts === "number") pushPoint(moveSeries, d.ts, avgMove);
 
     } catch (e) {
       setConn("offline");
@@ -251,8 +251,8 @@
       setTimeout(poll, 500);
     }
   }
+
   poll();
 </script>
-
 </body>
 </html>
