@@ -1,23 +1,28 @@
 import time
 
-latest = {
-    "ts": time.time(),
-    "wave": 0.0,       # breathing waveform
-    "bpm": 0.0,        # breaths/min
-    "status": "OK",    # OK or ALERT
+# monitor/state.py
 
-    "pulse": None,     # heart rate bpm (int/float)
-    "temp_c": None,    # body temperature in C
-    "cry_level": 0.0,  # 0..1
-    "crying": False,   # bool
-
-    "movement_state": "UNKNOWN",  # STILL/LIGHT/HEAVY
-    "avg_move_g": 0.0,
-    "light_events": 0,
-    "heavy_events": 0,
-    "drop": False,
-
+state = {
+    "devices": {
+        # device_id -> latest payload + server timestamp
+        # "breathing_esp32": {"ts": 0, ...},
+        # "movement_arduino": {"ts": 0, ...},
+    }
 }
+
+DEFAULTS = {
+    "breathing": {"device_id": None, "bpm": None, "wave": None, "status": "OK", "ts": None},
+    "movement": {
+        "device_id": None,
+        "movement_state": "UNKNOWN",
+        "avg_move_g": 0.0,
+        "light_events": 0,
+        "heavy_events": 0,
+        "drop": False,
+        "ts": None,
+    },
+}
+
 
 
 # This file is used to store the latest data from the monitor app. 
@@ -27,7 +32,8 @@ latest = {
 # #The data is stored in the latest variable.
 #  The dashboard retrieves the data from the latest variable and displays it to the user via GET /api/latest/ endpoint.
 
-
+# Right now an issue is that there will be overlap between the two endpoints: POST /api/data updates the latest variable, 
+# and GET /api/latest/ reads from the latest variable to display the most recent data on the dashboard.
 
 
 #Summary: we store the most recent data here so both endpoints can access it. The device updates it, and the dashboard reads from it.

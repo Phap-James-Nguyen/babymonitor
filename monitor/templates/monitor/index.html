@@ -202,25 +202,30 @@
       const r = await fetch("/api/latest", { cache: "no-store" });
       const d = await r.json();
 
-      if (typeof d.ts === "number") updateLastUpdated(d.ts);
+      const b = d.breathing || {};
+      const m = d.movement || {};
 
-      $("deviceId").textContent = `Device: ${d.device_id ?? "--"}`;
+      // IMPORTANT: connection uses BREATHING timestamp (critical sensor)
+      if (typeof b.ts === "number") updateLastUpdated(b.ts);
+      else setConn("offline");
 
-      // breathing metrics (may be 0 if movement-only device is posting)
-      $("bpm").textContent = (d.bpm ?? 0) ? Math.round(d.bpm) : "--";
-      $("wave").textContent = (d.wave ?? 0) ? Math.round(d.wave) : "--";
+      $("deviceId").textContent = `Breathing: ${b.device_id ?? "--"} • Movement: ${m.device_id ?? "--"}`;
+
+      // breathing metrics
+      $("bpm").textContent  = (b.bpm ?? 0) ? Math.round(b.bpm) : "--";
+      $("wave").textContent = (b.wave ?? 0) ? Math.round(b.wave) : "--";
 
       // movement metrics
-      const ms = (d.movement_state ?? "UNKNOWN").toUpperCase();
+      const ms = (m.movement_state ?? "UNKNOWN").toUpperCase();
       $("moveState").textContent = ms;
 
-      const avgMove = Number(d.avg_move_g ?? 0);
+      const avgMove = Number(m.avg_move_g ?? 0);
       $("avgMove").textContent = avgMove.toFixed(3);
-      $("lightCnt").textContent = d.light_events ?? 0;
-      $("heavyCnt").textContent = d.heavy_events ?? 0;
+      $("lightCnt").textContent = m.light_events ?? 0;
+      $("heavyCnt").textContent = m.heavy_events ?? 0;
 
-      // drop UI
-      if (d.drop) {
+      // drop UI (movement)
+      if (m.drop) {
         $("dropBadge").textContent = "⚠️ DROP detected!";
         $("dropBadge").style.color = "#dc2626";
         $("dropBanner").textContent = "Drop: DETECTED";
@@ -230,13 +235,15 @@
       }
 
       // charts
-      if (typeof d.ts === "number") {
-        if (d.wave !== undefined && d.wave !== null) pushPoint(waveSeries, d.ts, Number(d.wave));
-        pushPoint(moveSeries, d.ts, avgMove);
+      if (typeof b.ts === "number" && b.wave !== undefined && b.wave !== null) {
+        pushPoint(waveSeries, b.ts, Number(b.wave));
+      }
+      if (typeof m.ts === "number") {
+        pushPoint(moveSeries, m.ts, avgMove);
       }
 
       // breathing alert
-      updateAlertUI(d.status === "ALERT");
+      updateAlertUI(b.status === "ALERT");
 
     } catch (e) {
       setConn("offline");
@@ -246,5 +253,6 @@
   }
   poll();
 </script>
+
 </body>
 </html>

@@ -7,7 +7,7 @@ const char* WIFI_SSID = "James Iphone";
 const char* WIFI_PASS = "james123";
 
 // your laptop IP on hotspot (from ipconfig)
-const char* SERVER_IP = "172.20.10.2";
+const char* SERVER_IP = "172.20.10.3";
 const int   SERVER_PORT = 8000;
 const char* POST_PATH = "/api/data";
 
