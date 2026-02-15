@@ -10,6 +10,13 @@ latest = {
     "temp_c": None,    # body temperature in C
     "cry_level": 0.0,  # 0..1
     "crying": False,   # bool
+
+    "movement_state": "UNKNOWN",  # STILL/LIGHT/HEAVY
+    "avg_move_g": 0.0,
+    "light_events": 0,
+    "heavy_events": 0,
+    "drop": False,
+
 }
 
 
