@@ -18,7 +18,7 @@ WiFiClient wifi;
 HttpClient client(wifi, SERVER_IP, SERVER_PORT);
 
 // -------------------- DHT22 --------------------
-const int pinDHT22 = 5;
+const int pinDHT22 = 2;
 SimpleDHT22 dht22(pinDHT22);
 
 float temperatureC = NAN;

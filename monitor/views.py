@@ -6,15 +6,33 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .state import latest_movement, latest_audio
 
+# If audio hasn't updated recently, treat cry as OFF
+CRY_STALE_SEC = 6.0
+
 
 def index(request):
     return render(request, "monitor/index.html")
 
 
 def api_latest(request):
+    now = time.time()
+
+    # return copies so we can safely adjust derived fields
+    m = dict(latest_movement)
+    a = dict(latest_audio)
+
+    # Auto-clear cry if audio updates stop
+    ts_a = a.get("ts")
+    if isinstance(ts_a, (int, float)):
+        if (now - ts_a) > CRY_STALE_SEC:
+            a["cry_detected"] = False
+    else:
+        a["cry_detected"] = False
+
     return JsonResponse({
-        "movement": latest_movement,
-        "audio": latest_audio,
+        "movement": m,
+        "audio": a,
+        "server_ts": now,
     })
 
 

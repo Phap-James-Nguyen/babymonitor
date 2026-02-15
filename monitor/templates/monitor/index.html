@@ -42,11 +42,12 @@
           <div class="label">Safety Status</div>
           <div id="statusText" class="status-text">OK</div>
           <div id="statusSub" class="tiny">Waiting for data…</div>
-          <div class="tiny muted" id="alertHint"></div>
+          <div class="tiny muted" id="alertHint">
+            (Tip) Click anywhere once to allow sound + notifications.
+          </div>
         </div>
 
         <div class="status-actions" style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button id="enableAlertsBtn" class="btn">Enable Alerts</button>
           <button id="turnOffAlarmBtn" class="btn btn-danger" disabled>Turn Off Alarm</button>
         </div>
       </div>
@@ -123,11 +124,12 @@
     <div class="card">
       <div class="label">Tip</div>
       <div class="tiny muted">
-        Click <b>Enable Alerts</b> once to allow browser notifications + sound.
+        The first click unlocks sound/notifications. After that, alerts work automatically.
       </div>
     </div>
   </main>
 
+  <!-- LATCHED ALERT MODAL -->
   <div id="alarmModalOverlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="modal">
       <h2 class="modal-title" id="alarmModalTitle">🚨 Alert</h2>
@@ -137,7 +139,6 @@
       <p class="modal-body" id="alarmModalBody">--</p>
 
       <div class="modal-actions">
-        <button id="alarmModalEnableBtn" class="btn">Enable Alerts</button>
         <button id="alarmModalOffBtn" class="btn btn-danger">Turn Off Alarm</button>
       </div>
     </div>
@@ -146,6 +147,9 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
+  // ----------------------------
+  // Session timer
+  // ----------------------------
   const startMs = Date.now();
   setInterval(() => {
     const s = Math.floor((Date.now() - startMs) / 1000);
@@ -154,21 +158,35 @@
     $("sessionTime").textContent = `${mm}:${ss}`;
   }, 500);
 
+  // ----------------------------
+  // Connection badge
+  // ----------------------------
   function setConn(state) {
-    if (state === "ok") { $("connBadge").className = "badge badge-ok"; $("connBadge").textContent = "Connected"; }
-    else if (state === "stale") { $("connBadge").className = "badge badge-warn"; $("connBadge").textContent = "Stale data"; }
-    else { $("connBadge").className = "badge badge-bad"; $("connBadge").textContent = "Offline"; }
+    if (state === "ok") {
+      $("connBadge").className = "badge badge-ok";
+      $("connBadge").textContent = "Connected";
+    } else if (state === "stale") {
+      $("connBadge").className = "badge badge-warn";
+      $("connBadge").textContent = "Stale data";
+    } else {
+      $("connBadge").className = "badge badge-bad";
+      $("connBadge").textContent = "Offline";
+    }
   }
 
   function updateLastUpdated(tsSeconds) {
     const ageMs = Date.now() - (tsSeconds * 1000);
     const ageSec = Math.max(0, ageMs / 1000);
     $("lastUpdated").textContent = `Last update: ${ageSec.toFixed(1)}s ago`;
+
     if (ageSec < 2.0) setConn("ok");
     else if (ageSec < 6.0) setConn("stale");
     else setConn("offline");
   }
 
+  // ----------------------------
+  // Chart helpers
+  // ----------------------------
   function makeChart(canvasId, label) {
     const ctx = document.getElementById(canvasId).getContext("2d");
     const labels = [];
@@ -191,11 +209,49 @@
   const moveSeries = makeChart("moveChart", "Avg move (g)");
   $("clearMove").onclick = () => { moveSeries.labels.length=0; moveSeries.points.length=0; moveSeries.chart.update(); };
 
-  let audioCtx = null, alarmOn = false, sirenNodes = null;
+  // ----------------------------
+  // ALWAYS-ON alerts (auto-unlock on first click)
+  // ----------------------------
+  let audioCtx = null;
+  let alarmOn = false;
+  let sirenNodes = null;
 
   function ensureAudioUnlocked() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  async function unlockAlertsOnce() {
+    // run only once per browser/session interaction
+    ensureAudioUnlocked();
+
+    // request notifications permission (must be in a user gesture)
+    if ("Notification" in window && Notification.permission !== "granted") {
+      try { await Notification.requestPermission(); } catch(e) {}
+    }
+
+    localStorage.setItem("alerts_enabled", "1");
+
+    if (!("Notification" in window)) {
+      $("alertHint").textContent = "Sound enabled. (Notifications not supported.)";
+    } else if (Notification.permission === "granted") {
+      $("alertHint").textContent = "Alerts enabled ✅ (sound + notifications)";
+    } else {
+      $("alertHint").textContent = "Sound enabled ✅ (notifications blocked by browser)";
+    }
+  }
+
+  // On ANY click/tap, unlock (first time only)
+  let alertsUnlockedThisPage = false;
+  window.addEventListener("pointerdown", () => {
+    if (alertsUnlockedThisPage) return;
+    alertsUnlockedThisPage = true;
+    unlockAlertsOnce();
+  }, { passive: true });
+
+  // If user already enabled before, update hint (still needs a click to unlock audio context on some browsers)
+  if (localStorage.getItem("alerts_enabled") === "1") {
+    $("alertHint").textContent = "Alerts ready ✅ (If you don't hear sound, click once anywhere.)";
   }
 
   function startSiren() {
@@ -204,8 +260,10 @@
     if (!audioCtx) return;
 
     alarmOn = true;
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
+
     osc.type = "sawtooth";
     osc.frequency.value = 700;
     gain.gain.value = 0.06;
@@ -223,58 +281,71 @@
 
     osc.start();
     lfo.start();
+
     sirenNodes = { osc, gain, lfo, lfoGain };
   }
 
   function stopSiren() {
     alarmOn = false;
     if (!sirenNodes) return;
+
     try { sirenNodes.osc.stop(); } catch(e) {}
     try { sirenNodes.lfo.stop(); } catch(e) {}
+
     try { sirenNodes.osc.disconnect(); } catch(e) {}
     try { sirenNodes.lfo.disconnect(); } catch(e) {}
     try { sirenNodes.gain.disconnect(); } catch(e) {}
     try { sirenNodes.lfoGain.disconnect(); } catch(e) {}
+
     sirenNodes = null;
   }
 
-  async function requestAlertsPermission() {
-    ensureAudioUnlocked();
-    if (!("Notification" in window)) { $("alertHint").textContent = "Notifications not supported in this browser."; return; }
-    if (Notification.permission === "granted") { $("alertHint").textContent = "Alerts enabled ✅"; return; }
-    const perm = await Notification.requestPermission();
-    $("alertHint").textContent = (perm === "granted")
-      ? "Alerts enabled ✅"
-      : "Notifications blocked. You can still get sound after clicking Enable Alerts.";
-  }
-
-  $("enableAlertsBtn").onclick = requestAlertsPermission;
-  $("alarmModalEnableBtn").onclick = requestAlertsPermission;
-
+  // Notifications with cooldown (prevents spam)
   let lastNotifyMs = 0;
-  const NOTIFY_COOLDOWN_MS = 15000;
+  const NOTIFY_COOLDOWN_MS = 8000; // a bit faster now
 
   function sendNotification(title, body) {
     const now = Date.now();
     if (now - lastNotifyMs < NOTIFY_COOLDOWN_MS) return;
     lastNotifyMs = now;
-    if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body });
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body });
+    }
   }
 
+  // ----------------------------
+  // LATCHED alarms: allow fast re-alert for DIFFERENT reasons
+  // ----------------------------
   let alarmLatched = false;
   let alarmReason = ""; // FALL | FACE_DOWN | CRY
-  let suppressUntilMs = 0;
+
+  // cooldown per reason after turning off
+  const COOLDOWN_SAME_REASON_MS = 12000; // only blocks SAME reason
+  const lastOffByReason = {
+    "FALL": 0,
+    "FACE_DOWN": 0,
+    "CRY": 0,
+  };
 
   function showAlarmModal(title, body) {
     $("alarmModalTitle").textContent = title;
     $("alarmModalBody").textContent = body;
     $("alarmModalOverlay").classList.remove("hidden");
   }
-  function hideAlarmModal() { $("alarmModalOverlay").classList.add("hidden"); }
+
+  function hideAlarmModal() {
+    $("alarmModalOverlay").classList.add("hidden");
+  }
+
+  function canLatch(reason) {
+    const lastOff = lastOffByReason[reason] || 0;
+    return (Date.now() - lastOff) >= COOLDOWN_SAME_REASON_MS;
+  }
 
   function latchAlarm(reason, details = {}) {
-    if (alarmLatched) return;
-    if (Date.now() < suppressUntilMs) return;
+    if (alarmLatched) return;              // alarm already active until parent turns off
+    if (!canLatch(reason)) return;         // only blocks same-reason repeats
 
     alarmLatched = true;
     alarmReason = reason;
@@ -308,19 +379,30 @@
 
   function turnOffAlarm() {
     if (!alarmLatched) return;
+
+    // record cooldown for ONLY this reason
+    if (alarmReason) lastOffByReason[alarmReason] = Date.now();
+
     alarmLatched = false;
     alarmReason = "";
-    suppressUntilMs = Date.now() + 15000;
+
     stopSiren();
     hideAlarmModal();
+
     $("turnOffAlarmBtn").disabled = true;
     $("statusSub").textContent = "Alarm turned off. Monitoring continues…";
   }
 
   $("turnOffAlarmBtn").onclick = turnOffAlarm;
   $("alarmModalOffBtn").onclick = turnOffAlarm;
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && alarmLatched) turnOffAlarm(); });
 
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && alarmLatched) turnOffAlarm();
+  });
+
+  // ----------------------------
+  // Safety UI logic
+  // ----------------------------
   function setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus }) {
     if (alarmLatched) {
       $("statusCard").className = "status status-alert";
@@ -328,6 +410,7 @@
       $("statusSub").textContent = "Alarm ON — a parent must turn it off.";
       return;
     }
+
     const anyAlert = (heavyNow || drop || faceDown || cryDetected || envStatus === "ALERT");
     if (anyAlert) {
       $("statusCard").className = "status status-alert";
@@ -340,6 +423,9 @@
     }
   }
 
+  // ----------------------------
+  // Poll loop
+  // ----------------------------
   async function poll() {
     try {
       const r = await fetch("/api/latest", { cache: "no-store" });
@@ -348,12 +434,13 @@
       const m = data.movement || {};
       const a = data.audio || {};
 
+      // Last update = max(ts)
       const tsM = (typeof m.ts === "number") ? m.ts : 0;
       const tsA = (typeof a.ts === "number") ? a.ts : 0;
       const ts = Math.max(tsM, tsA);
       if (ts > 0) updateLastUpdated(ts);
 
-      $("deviceId").textContent = `Devices: ${m.device_id ?? "movement"} + ${a.device_id ?? "cry_esp32"}`;
+      $("deviceId").textContent = `Devices: ${m.device_id ?? "movement"} + ${a.device_id ?? "audio"}`;
 
       // movement
       const moveState = (m.movement_state ?? "UNKNOWN").toUpperCase();
@@ -393,22 +480,32 @@
       $("envBanner").textContent = (envStatus === "ALERT") ? "Environment: ALERT" : "Environment: OK";
 
       // audio
-      const cryDetected = !!a.cry_detected;
+            // audio
+      const cryDetectedRaw = !!a.cry_detected;
       const cryFreq = (typeof a.cry_freq_hz === "number") ? a.cry_freq_hz : null;
-      const cryVol = (typeof a.cry_volume === "number") ? a.cry_volume : null;
+      const cryVol  = (typeof a.cry_volume === "number") ? a.cry_volume : null;
+
+      // IMPORTANT: auto-expire cry if ESP32 hasn't updated recently
+      const cryTs = (typeof a.ts === "number") ? a.ts : 0;
+      const cryFresh = cryTs > 0 && ((Date.now() - cryTs * 1000) < 6500);
+      const cryDetected = cryFresh && cryDetectedRaw;
 
       $("cryState").textContent = cryDetected ? "CRYING" : "Quiet";
       $("cryFreq").textContent = cryFreq ? String(Math.round(cryFreq)) : "--";
-      $("cryVol").textContent = cryVol ? String(Math.round(cryVol)) : "--";
+      $("cryVol").textContent  = cryVol  ? String(Math.round(cryVol))  : "--";
 
       $("cryBanner").textContent = (alarmLatched && alarmReason === "CRY")
         ? "Crying: DETECTED (ACK REQUIRED)"
         : (cryDetected ? "Crying: DETECTED" : "Crying: none");
 
-      // latch priority
+
+      // Latch triggers (priority)
       if (heavyNow) latchAlarm("FALL", { drop });
       else if (faceDown) latchAlarm("FACE_DOWN");
-      else if (cryDetected) latchAlarm("CRY", { freq: cryFreq ? Math.round(cryFreq) : null, vol: cryVol ? Math.round(cryVol) : null });
+      else if (cryDetected) latchAlarm("CRY", {
+        freq: cryFreq ? Math.round(cryFreq) : null,
+        vol: cryVol ? Math.round(cryVol) : null
+      });
 
       setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus });
 
