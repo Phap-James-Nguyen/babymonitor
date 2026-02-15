@@ -12,11 +12,11 @@ latest_movement = {
     "drop": False,
     "face_down": False,
 
-    # environment
+    # environment (Arduino)
     "temp_c": None,
     "temp_f": None,
     "humidity": None,
-    "env_status": "OK",   # OK / ALERT
+    "env_status": "OK",
 }
 
 latest_audio = {
@@ -27,4 +27,10 @@ latest_audio = {
     "cry_detected": False,
     "cry_freq_hz": None,
     "cry_volume": None,
+
+    # environment (ESP32)
+    "temp_c": None,
+    "temp_f": None,
+    "humidity": None,
+    "env_status": "OK",
 }
