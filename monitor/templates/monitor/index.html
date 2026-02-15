@@ -7,6 +7,64 @@
   <title>Baby Monitor Dashboard</title>
   <link rel="stylesheet" href="{% static 'monitor/app.css' %}">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Modal styles (kept here so you don't need to touch app.css) -->
+  <style>
+    .hidden { display: none !important; }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.62);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 16px;
+    }
+    .modal {
+      width: min(560px, 94vw);
+      background: #fff;
+      color: #111;
+      border-radius: 18px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      padding: 18px 18px 16px 18px;
+    }
+    .modal-title {
+      font-size: 20px;
+      font-weight: 800;
+      margin: 0 0 8px 0;
+    }
+    .modal-body {
+      font-size: 14px;
+      line-height: 1.45;
+      margin: 0 0 14px 0;
+      color: #222;
+    }
+    .modal-warning {
+      background: #fff7ed;
+      border: 1px solid #fed7aa;
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #7c2d12;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .btn-danger {
+      background: #dc2626;
+      border: 1px solid #b91c1c;
+      color: #fff;
+    }
+    .btn-danger:hover { filter: brightness(0.95); }
+  </style>
 </head>
 
 <body>
@@ -36,7 +94,7 @@
 
         <div class="status-actions" style="display:flex; gap:10px; flex-wrap:wrap;">
           <button id="enableAlertsBtn" class="btn">Enable Alerts</button>
-          <button id="ackBtn" class="btn">Acknowledge</button>
+          <button id="turnOffAlarmBtn" class="btn btn-danger" disabled>Turn Off Alarm</button>
         </div>
       </div>
 
@@ -111,18 +169,24 @@
     </div>
   </main>
 
+  <!-- LATCHED ALERT MODAL -->
+  <div id="alarmModalOverlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h2 class="modal-title" id="alarmModalTitle">🚨 Alert</h2>
+      <div class="modal-warning">
+        Alarm is ON and will keep sounding until a parent turns it off.
+      </div>
+      <p class="modal-body" id="alarmModalBody">--</p>
+
+      <div class="modal-actions">
+        <button id="alarmModalEnableBtn" class="btn">Enable Alerts</button>
+        <button id="alarmModalOffBtn" class="btn btn-danger">Turn Off Alarm</button>
+      </div>
+    </div>
+  </div>
+
 <script>
   const $ = (id) => document.getElementById(id);
-
-  // ----------------------------
-  // Acknowledge silence window
-  // ----------------------------
-  let acknowledgedUntil = 0;
-  $("ackBtn").onclick = () => {
-    acknowledgedUntil = Date.now() + 12000; // silence 12s
-    $("statusSub").textContent = "Alerts acknowledged (silenced for 12s).";
-    stopAlarm();
-  };
 
   // ----------------------------
   // Session timer
@@ -187,50 +251,65 @@
   $("clearMove").onclick = () => { moveSeries.labels.length=0; moveSeries.points.length=0; moveSeries.chart.update(); };
 
   // ----------------------------
-  // Notifications + Alarm sound
+  // Notifications + continuous alarm (siren)
   // ----------------------------
   let audioCtx = null;
-  let alarmInterval = null;
   let alarmOn = false;
+  let sirenNodes = null;
 
   function ensureAudioUnlocked() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") audioCtx.resume();
   }
 
-  function beepOnce() {
-    if (!audioCtx) return;
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.type = "sine";
-    o.frequency.value = 880; // beep tone
-    g.gain.value = 0.12;
-
-    o.connect(g);
-    g.connect(audioCtx.destination);
-
-    o.start();
-    setTimeout(() => { o.stop(); }, 250);
-  }
-
-  function startAlarm() {
+  function startSiren() {
     if (alarmOn) return;
+    ensureAudioUnlocked();
+    if (!audioCtx) return;
+
     alarmOn = true;
 
-    // repeating beep pattern
-    beepOnce();
-    alarmInterval = setInterval(() => {
-      beepOnce();
-      setTimeout(beepOnce, 350);
-    }, 1400);
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    // Main tone
+    osc.type = "sawtooth";
+    osc.frequency.value = 700;
+
+    // Volume (keep reasonable)
+    gain.gain.value = 0.06;
+
+    // LFO to sweep frequency (classic siren feel)
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    lfo.type = "sine";
+    lfo.frequency.value = 0.55;     // ~1.8s cycle
+    lfoGain.gain.value = 520;       // sweep depth
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start();
+    lfo.start();
+
+    sirenNodes = { osc, gain, lfo, lfoGain };
   }
 
-  function stopAlarm() {
+  function stopSiren() {
     alarmOn = false;
-    if (alarmInterval) {
-      clearInterval(alarmInterval);
-      alarmInterval = null;
-    }
+    if (!sirenNodes) return;
+
+    try { sirenNodes.osc.stop(); } catch(e) {}
+    try { sirenNodes.lfo.stop(); } catch(e) {}
+
+    try { sirenNodes.osc.disconnect(); } catch(e) {}
+    try { sirenNodes.lfo.disconnect(); } catch(e) {}
+    try { sirenNodes.gain.disconnect(); } catch(e) {}
+    try { sirenNodes.lfoGain.disconnect(); } catch(e) {}
+
+    sirenNodes = null;
   }
 
   async function requestAlertsPermission() {
@@ -249,15 +328,13 @@
     const perm = await Notification.requestPermission();
     if (perm === "granted") {
       $("alertHint").textContent = "Alerts enabled ✅";
-      // quick sound test
-      startAlarm();
-      setTimeout(stopAlarm, 1200);
     } else {
       $("alertHint").textContent = "Notifications blocked. You can still get sound after clicking Enable Alerts.";
     }
   }
 
   $("enableAlertsBtn").onclick = requestAlertsPermission;
+  $("alarmModalEnableBtn").onclick = requestAlertsPermission;
 
   // Send notification with cooldown (prevents spam)
   let lastNotifyMs = 0;
@@ -274,16 +351,84 @@
   }
 
   // ----------------------------
-  // Safety UI logic
+  // LATCHED heavy-fall alarm logic
   // ----------------------------
-  let heavyFallActivePrev = false;
+  let alarmLatched = false;
+  let suppressUntilMs = 0;
 
-  function setSafetyUI({heavyFall, drop, faceDown, envStatus}) {
-    const silenced = Date.now() < acknowledgedUntil;
+  function showAlarmModal(title, body) {
+    $("alarmModalTitle").textContent = title;
+    $("alarmModalBody").textContent = body;
+    $("alarmModalOverlay").classList.remove("hidden");
+  }
 
-    const anyAlert = (heavyFall || drop || faceDown || envStatus === "ALERT");
+  function hideAlarmModal() {
+    $("alarmModalOverlay").classList.add("hidden");
+  }
 
-    if (anyAlert && !silenced) {
+  function latchAlarm({ drop }) {
+    if (alarmLatched) return;
+    if (Date.now() < suppressUntilMs) return;
+
+    alarmLatched = true;
+
+    const msg = drop
+      ? "DROP / free-fall was detected. Please check on the baby immediately."
+      : "HEAVY movement / possible fall was detected. Please check on the baby immediately.";
+
+    // UI popup (in-page)
+    showAlarmModal("🚨 Heavy Fall Detected", msg + " Click “Turn Off Alarm” after you respond.");
+
+    // Continuous alarm sound
+    startSiren();
+
+    // Browser notification
+    sendNotification("🚨 Baby Monitor Alert", msg);
+
+    // Enable the “Turn Off Alarm” button (top)
+    $("turnOffAlarmBtn").disabled = false;
+
+    // Status text
+    $("statusCard").className = "status status-alert";
+    $("statusText").textContent = "ALERT";
+    $("statusSub").textContent = "Heavy fall detected — alarm ON until a parent turns it off.";
+  }
+
+  function turnOffAlarm() {
+    if (!alarmLatched) return;
+
+    alarmLatched = false;
+    suppressUntilMs = Date.now() + 15000; // prevents immediate re-trigger spam
+
+    stopSiren();
+    hideAlarmModal();
+
+    $("turnOffAlarmBtn").disabled = true;
+    $("statusSub").textContent = "Alarm turned off. Monitoring continues…";
+  }
+
+  $("turnOffAlarmBtn").onclick = turnOffAlarm;
+  $("alarmModalOffBtn").onclick = turnOffAlarm;
+
+  // Escape closes modal AND turns off alarm (optional convenience)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && alarmLatched) turnOffAlarm();
+  });
+
+  // ----------------------------
+  // Safety UI logic (non-latched alerts still show)
+  // ----------------------------
+  function setSafetyUI({ heavyNow, drop, faceDown, envStatus }) {
+    // If alarmLatched, keep ALERT UI no matter what.
+    if (alarmLatched) {
+      $("statusCard").className = "status status-alert";
+      $("statusText").textContent = "ALERT";
+      $("statusSub").textContent = "Heavy fall detected — alarm ON until a parent turns it off.";
+      return;
+    }
+
+    const anyAlert = (heavyNow || drop || faceDown || envStatus === "ALERT");
+    if (anyAlert) {
       $("statusCard").className = "status status-alert";
       $("statusText").textContent = "ALERT";
       $("statusSub").textContent = "Safety warning detected!";
@@ -292,23 +437,6 @@
       $("statusText").textContent = "OK";
       $("statusSub").textContent = "Monitoring…";
     }
-
-    // Heavy/fall triggers sound + notification (if not silenced)
-    if ((heavyFall || drop) && !silenced) {
-      startAlarm();
-    } else {
-      stopAlarm();
-    }
-
-    // Notify only on rising edge (false -> true)
-    const heavyNow = (heavyFall || drop);
-    if (heavyNow && !heavyFallActivePrev && !silenced) {
-      sendNotification(
-        "Baby Monitor Alert",
-        drop ? "DROP detected!" : "HEAVY movement detected!"
-      );
-    }
-    heavyFallActivePrev = heavyNow;
   }
 
   // ----------------------------
@@ -320,7 +448,6 @@
       const d = await r.json();
 
       if (typeof d.ts === "number") updateLastUpdated(d.ts);
-
       $("deviceId").textContent = `Device: ${d.device_id ?? "--"}`;
 
       // movement
@@ -364,19 +491,28 @@
       $("dropBanner").textContent = drop ? "Drop: DETECTED" : "Drop: none";
       $("faceDownBanner").textContent = faceDown ? "Face down: DETECTED" : "Face down: none";
 
-      // heavy/fall banner: treat HEAVY as alert state (plus drop)
-      const heavyFall = (moveState === "HEAVY");
-      $("fallBanner").textContent = (heavyFall || drop) ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none";
+      // heavy fall condition
+      const heavyNow = (moveState === "HEAVY") || drop;
 
-      // Set overall safety UI + alarm + notification
-      setSafetyUI({ heavyFall, drop, faceDown, envStatus });
+      // Fall banner should show ACK REQUIRED if latched
+      if (alarmLatched) $("fallBanner").textContent = "Fall/Heavy: DETECTED (ACK REQUIRED)";
+      else $("fallBanner").textContent = heavyNow ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none";
+
+      // If heavy/drop happens, latch alarm (this is the key change)
+      if (heavyNow) {
+        latchAlarm({ drop });
+      }
+
+      // Update safety UI
+      setSafetyUI({ heavyNow, drop, faceDown, envStatus });
 
       // chart
       if (typeof d.ts === "number") pushPoint(moveSeries, d.ts, avgMove);
 
     } catch (e) {
       setConn("offline");
-      stopAlarm();
+      // IMPORTANT: don't stop a latched alarm just because polling failed
+      if (!alarmLatched) stopSiren();
     } finally {
       setTimeout(poll, 500);
     }
