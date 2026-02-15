@@ -31,8 +31,11 @@
           <div class="label">Safety Status</div>
           <div id="statusText" class="status-text">OK</div>
           <div id="statusSub" class="tiny">Waiting for data…</div>
+          <div class="tiny muted" id="alertHint"></div>
         </div>
-        <div class="status-actions">
+
+        <div class="status-actions" style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button id="enableAlertsBtn" class="btn">Enable Alerts</button>
           <button id="ackBtn" class="btn">Acknowledge</button>
         </div>
       </div>
@@ -41,6 +44,7 @@
         <div class="mini" id="dropBanner">Drop: --</div>
         <div class="mini" id="faceDownBanner">Face down: --</div>
         <div class="mini" id="envBanner">Environment: --</div>
+        <div class="mini" id="fallBanner">Fall/Heavy: --</div>
       </div>
     </section>
 
@@ -101,7 +105,8 @@
     <div class="card">
       <div class="label">Tip</div>
       <div class="tiny muted">
-        Arduino posts to <code>/api/data</code> with movement + temp + humidity.
+        Click <b>Enable Alerts</b> once to allow browser notifications + sound.
+        (Browsers block sound/notifications until you interact.)
       </div>
     </div>
   </main>
@@ -109,14 +114,19 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
-  // --- acknowledge warnings for 8s ---
+  // ----------------------------
+  // Acknowledge silence window
+  // ----------------------------
   let acknowledgedUntil = 0;
   $("ackBtn").onclick = () => {
-    acknowledgedUntil = Date.now() + 8000;
-    $("statusSub").textContent = "Warnings acknowledged (silenced for 8s).";
+    acknowledgedUntil = Date.now() + 12000; // silence 12s
+    $("statusSub").textContent = "Alerts acknowledged (silenced for 12s).";
+    stopAlarm();
   };
 
-  // --- session timer ---
+  // ----------------------------
+  // Session timer
+  // ----------------------------
   const startMs = Date.now();
   setInterval(() => {
     const s = Math.floor((Date.now() - startMs) / 1000);
@@ -125,7 +135,9 @@
     $("sessionTime").textContent = `${mm}:${ss}`;
   }, 500);
 
-  // --- connection badge ---
+  // ----------------------------
+  // Connection badge
+  // ----------------------------
   function setConn(state) {
     if (state === "ok") {
       $("connBadge").className = "badge badge-ok";
@@ -149,7 +161,9 @@
     else setConn("offline");
   }
 
-  // --- chart helpers ---
+  // ----------------------------
+  // Chart helpers
+  // ----------------------------
   function makeChart(canvasId, label) {
     const ctx = document.getElementById(canvasId).getContext("2d");
     const labels = [];
@@ -172,9 +186,102 @@
   const moveSeries = makeChart("moveChart", "Avg move (g)");
   $("clearMove").onclick = () => { moveSeries.labels.length=0; moveSeries.points.length=0; moveSeries.chart.update(); };
 
-  function setSafetyUI(drop, faceDown, envStatus) {
+  // ----------------------------
+  // Notifications + Alarm sound
+  // ----------------------------
+  let audioCtx = null;
+  let alarmInterval = null;
+  let alarmOn = false;
+
+  function ensureAudioUnlocked() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  function beepOnce() {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = "sine";
+    o.frequency.value = 880; // beep tone
+    g.gain.value = 0.12;
+
+    o.connect(g);
+    g.connect(audioCtx.destination);
+
+    o.start();
+    setTimeout(() => { o.stop(); }, 250);
+  }
+
+  function startAlarm() {
+    if (alarmOn) return;
+    alarmOn = true;
+
+    // repeating beep pattern
+    beepOnce();
+    alarmInterval = setInterval(() => {
+      beepOnce();
+      setTimeout(beepOnce, 350);
+    }, 1400);
+  }
+
+  function stopAlarm() {
+    alarmOn = false;
+    if (alarmInterval) {
+      clearInterval(alarmInterval);
+      alarmInterval = null;
+    }
+  }
+
+  async function requestAlertsPermission() {
+    ensureAudioUnlocked();
+
+    if (!("Notification" in window)) {
+      $("alertHint").textContent = "Notifications not supported in this browser.";
+      return;
+    }
+
+    if (Notification.permission === "granted") {
+      $("alertHint").textContent = "Alerts enabled ✅";
+      return;
+    }
+
+    const perm = await Notification.requestPermission();
+    if (perm === "granted") {
+      $("alertHint").textContent = "Alerts enabled ✅";
+      // quick sound test
+      startAlarm();
+      setTimeout(stopAlarm, 1200);
+    } else {
+      $("alertHint").textContent = "Notifications blocked. You can still get sound after clicking Enable Alerts.";
+    }
+  }
+
+  $("enableAlertsBtn").onclick = requestAlertsPermission;
+
+  // Send notification with cooldown (prevents spam)
+  let lastNotifyMs = 0;
+  const NOTIFY_COOLDOWN_MS = 15000;
+
+  function sendNotification(title, body) {
+    const now = Date.now();
+    if (now - lastNotifyMs < NOTIFY_COOLDOWN_MS) return;
+    lastNotifyMs = now;
+
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body });
+    }
+  }
+
+  // ----------------------------
+  // Safety UI logic
+  // ----------------------------
+  let heavyFallActivePrev = false;
+
+  function setSafetyUI({heavyFall, drop, faceDown, envStatus}) {
     const silenced = Date.now() < acknowledgedUntil;
-    const anyAlert = (!!drop || !!faceDown || (envStatus === "ALERT"));
+
+    const anyAlert = (heavyFall || drop || faceDown || envStatus === "ALERT");
 
     if (anyAlert && !silenced) {
       $("statusCard").className = "status status-alert";
@@ -185,9 +292,28 @@
       $("statusText").textContent = "OK";
       $("statusSub").textContent = "Monitoring…";
     }
+
+    // Heavy/fall triggers sound + notification (if not silenced)
+    if ((heavyFall || drop) && !silenced) {
+      startAlarm();
+    } else {
+      stopAlarm();
+    }
+
+    // Notify only on rising edge (false -> true)
+    const heavyNow = (heavyFall || drop);
+    if (heavyNow && !heavyFallActivePrev && !silenced) {
+      sendNotification(
+        "Baby Monitor Alert",
+        drop ? "DROP detected!" : "HEAVY movement detected!"
+      );
+    }
+    heavyFallActivePrev = heavyNow;
   }
 
-  // --- poll loop ---
+  // ----------------------------
+  // Poll loop
+  // ----------------------------
   async function poll() {
     try {
       const r = await fetch("/api/latest", { cache: "no-store" });
@@ -198,7 +324,9 @@
       $("deviceId").textContent = `Device: ${d.device_id ?? "--"}`;
 
       // movement
-      $("moveState").textContent = (d.movement_state ?? "UNKNOWN").toUpperCase();
+      const moveState = (d.movement_state ?? "UNKNOWN").toUpperCase();
+      $("moveState").textContent = moveState;
+
       const avgMove = Number(d.avg_move_g ?? 0);
       $("avgMove").textContent = avgMove.toFixed(3);
       $("lightCnt").textContent = d.light_events ?? 0;
@@ -215,11 +343,8 @@
       }
 
       // humidity
-      if (typeof d.humidity === "number") {
-        $("humidity").textContent = `${d.humidity.toFixed(1)} %`;
-      } else {
-        $("humidity").textContent = "--";
-      }
+      if (typeof d.humidity === "number") $("humidity").textContent = `${d.humidity.toFixed(1)} %`;
+      else $("humidity").textContent = "--";
 
       // environment status
       const envStatus = (d.env_status ?? "OK").toUpperCase();
@@ -233,20 +358,25 @@
       }
 
       // drop + face down banners
-      if (d.drop) $("dropBanner").textContent = "Drop: DETECTED";
-      else $("dropBanner").textContent = "Drop: none";
+      const drop = !!d.drop;
+      const faceDown = !!d.face_down;
 
-      if (d.face_down) $("faceDownBanner").textContent = "Face down: DETECTED";
-      else $("faceDownBanner").textContent = "Face down: none";
+      $("dropBanner").textContent = drop ? "Drop: DETECTED" : "Drop: none";
+      $("faceDownBanner").textContent = faceDown ? "Face down: DETECTED" : "Face down: none";
 
-      // safety UI
-      setSafetyUI(!!d.drop, !!d.face_down, envStatus);
+      // heavy/fall banner: treat HEAVY as alert state (plus drop)
+      const heavyFall = (moveState === "HEAVY");
+      $("fallBanner").textContent = (heavyFall || drop) ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none";
+
+      // Set overall safety UI + alarm + notification
+      setSafetyUI({ heavyFall, drop, faceDown, envStatus });
 
       // chart
       if (typeof d.ts === "number") pushPoint(moveSeries, d.ts, avgMove);
 
     } catch (e) {
       setConn("offline");
+      stopAlarm();
     } finally {
       setTimeout(poll, 500);
     }
