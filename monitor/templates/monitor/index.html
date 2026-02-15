@@ -10,35 +10,12 @@
 
   <style>
     .hidden { display: none !important; }
-    .modal-overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.62);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 9999; padding: 16px;
-    }
-    .modal {
-      width: min(560px, 94vw);
-      background: #fff; color: #111;
-      border-radius: 18px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
-      padding: 18px 18px 16px 18px;
-    }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.62); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 16px; }
+    .modal { width: min(560px, 94vw); background: #fff; color: #111; border-radius: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); padding: 18px 18px 16px 18px; }
     .modal-title { font-size: 20px; font-weight: 800; margin: 0 0 8px 0; }
     .modal-body { font-size: 14px; line-height: 1.45; margin: 0 0 14px 0; color: #222; }
-    .modal-warning {
-      background: #fff7ed;
-      border: 1px solid #fed7aa;
-      border-radius: 12px;
-      padding: 10px 12px;
-      margin-bottom: 12px;
-      font-size: 13px;
-      color: #7c2d12;
-    }
-    .modal-actions {
-      display: flex; gap: 10px;
-      justify-content: flex-end; align-items: center;
-      flex-wrap: wrap; margin-top: 6px;
-    }
+    .modal-warning { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; color: #7c2d12; }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; flex-wrap: wrap; margin-top: 6px; }
     .btn-danger { background: #dc2626; border: 1px solid #b91c1c; color: #fff; }
     .btn-danger:hover { filter: brightness(0.95); }
   </style>
@@ -48,7 +25,7 @@
   <header class="header">
     <div class="header-left">
       <div class="title">🍼 Baby Monitor</div>
-      <div class="subtitle">Movement + Temp/Humidity + Cry</div>
+      <div class="subtitle">Movement + Temp + Humidity + Cry</div>
     </div>
 
     <div class="header-right">
@@ -59,7 +36,6 @@
   </header>
 
   <main class="container">
-    <!-- STATUS -->
     <section id="statusCard" class="status status-ok">
       <div class="status-top">
         <div>
@@ -85,7 +61,6 @@
       </div>
     </section>
 
-    <!-- METRICS -->
     <section class="grid">
       <div class="card">
         <div class="label">Movement State</div>
@@ -99,7 +74,6 @@
         <div class="label">Temperature</div>
         <div class="metric small" id="temp">--</div>
         <div class="tiny muted" id="tempSub">--</div>
-        <div class="tiny muted" id="envSource">Source: --</div>
       </div>
 
       <div class="card">
@@ -123,7 +97,6 @@
       </div>
     </section>
 
-    <!-- CHARTS -->
     <section class="grid-2">
       <div class="card">
         <div class="card-head">
@@ -151,7 +124,7 @@
     <div class="card">
       <div class="label">Tip</div>
       <div class="tiny muted">
-        First click unlocks sound/notifications. After that, alerts work automatically.
+        The first click unlocks sound/notifications. After that, alerts work automatically.
       </div>
     </div>
   </main>
@@ -249,8 +222,10 @@
   }
 
   async function unlockAlertsOnce() {
+    // run only once per browser/session interaction
     ensureAudioUnlocked();
 
+    // request notifications permission (must be in a user gesture)
     if ("Notification" in window && Notification.permission !== "granted") {
       try { await Notification.requestPermission(); } catch(e) {}
     }
@@ -266,6 +241,7 @@
     }
   }
 
+  // On ANY click/tap, unlock (first time only)
   let alertsUnlockedThisPage = false;
   window.addEventListener("pointerdown", () => {
     if (alertsUnlockedThisPage) return;
@@ -273,6 +249,7 @@
     unlockAlertsOnce();
   }, { passive: true });
 
+  // If user already enabled before, update hint (still needs a click to unlock audio context on some browsers)
   if (localStorage.getItem("alerts_enabled") === "1") {
     $("alertHint").textContent = "Alerts ready ✅ (If you don't hear sound, click once anywhere.)";
   }
@@ -286,6 +263,7 @@
 
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
+
     osc.type = "sawtooth";
     osc.frequency.value = 700;
     gain.gain.value = 0.06;
@@ -322,8 +300,9 @@
     sirenNodes = null;
   }
 
+  // Notifications with cooldown (prevents spam)
   let lastNotifyMs = 0;
-  const NOTIFY_COOLDOWN_MS = 8000;
+  const NOTIFY_COOLDOWN_MS = 8000; // a bit faster now
 
   function sendNotification(title, body) {
     const now = Date.now();
@@ -341,8 +320,13 @@
   let alarmLatched = false;
   let alarmReason = ""; // FALL | FACE_DOWN | CRY
 
-  const COOLDOWN_SAME_REASON_MS = 12000;
-  const lastOffByReason = { "FALL": 0, "FACE_DOWN": 0, "CRY": 0 };
+  // cooldown per reason after turning off
+  const COOLDOWN_SAME_REASON_MS = 12000; // only blocks SAME reason
+  const lastOffByReason = {
+    "FALL": 0,
+    "FACE_DOWN": 0,
+    "CRY": 0,
+  };
 
   function showAlarmModal(title, body) {
     $("alarmModalTitle").textContent = title;
@@ -360,8 +344,8 @@
   }
 
   function latchAlarm(reason, details = {}) {
-    if (alarmLatched) return;
-    if (!canLatch(reason)) return;
+    if (alarmLatched) return;              // alarm already active until parent turns off
+    if (!canLatch(reason)) return;         // only blocks same-reason repeats
 
     alarmLatched = true;
     alarmReason = reason;
@@ -396,6 +380,7 @@
   function turnOffAlarm() {
     if (!alarmLatched) return;
 
+    // record cooldown for ONLY this reason
     if (alarmReason) lastOffByReason[alarmReason] = Date.now();
 
     alarmLatched = false;
@@ -415,6 +400,9 @@
     if (e.key === "Escape" && alarmLatched) turnOffAlarm();
   });
 
+  // ----------------------------
+  // Safety UI logic
+  // ----------------------------
   function setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus }) {
     if (alarmLatched) {
       $("statusCard").className = "status status-alert";
@@ -446,7 +434,7 @@
       const m = data.movement || {};
       const a = data.audio || {};
 
-      // last update = max(ts)
+      // Last update = max(ts)
       const tsM = (typeof m.ts === "number") ? m.ts : 0;
       const tsA = (typeof a.ts === "number") ? a.ts : 0;
       const ts = Math.max(tsM, tsA);
@@ -476,53 +464,28 @@
         ? "Fall/Heavy: DETECTED (ACK REQUIRED)"
         : (heavyNow ? "Fall/Heavy: DETECTED" : "Fall/Heavy: none");
 
-      // ----------------------------
-      // Env: prefer Arduino, fallback to ESP32
-      // ----------------------------
-      const hasArduinoEnv = (typeof m.temp_c === "number") || (typeof m.humidity === "number");
-      const envSource = hasArduinoEnv ? "Arduino" : "ESP32";
-
-      const tempC = (typeof m.temp_c === "number") ? m.temp_c
-                  : (typeof a.temp_c === "number") ? a.temp_c
-                  : null;
-
-      const tempF = (typeof m.temp_f === "number") ? m.temp_f
-                  : (typeof a.temp_f === "number") ? a.temp_f
-                  : (tempC !== null ? (tempC * 1.8 + 32.0) : null);
-
-      const hum = (typeof m.humidity === "number") ? m.humidity
-                : (typeof a.humidity === "number") ? a.humidity
-                : null;
-
-      if (tempC !== null) {
-        $("temp").textContent = `${tempC.toFixed(1)} °C`;
-        $("tempSub").textContent = (tempF !== null) ? `${tempF.toFixed(1)} °F` : "--";
+      // env
+      if (typeof m.temp_c === "number") {
+        $("temp").textContent = `${m.temp_c.toFixed(1)} °C`;
+        $("tempSub").textContent = (typeof m.temp_f === "number") ? `${m.temp_f.toFixed(1)} °F` : "--";
       } else {
         $("temp").textContent = "--";
         $("tempSub").textContent = "--";
       }
 
-      $("humidity").textContent = (hum !== null) ? `${hum.toFixed(1)} %` : "--";
-      $("envSource").textContent = `Source: ${envSource}`;
+      $("humidity").textContent = (typeof m.humidity === "number") ? `${m.humidity.toFixed(1)} %` : "--";
 
-      const envStatus = (typeof m.env_status === "string" && m.env_status)
-        ? String(m.env_status).toUpperCase()
-        : (typeof a.env_status === "string" && a.env_status)
-          ? String(a.env_status).toUpperCase()
-          : "OK";
-
+      const envStatus = (m.env_status ?? "OK").toUpperCase();
       $("envStatus").textContent = envStatus;
       $("envBanner").textContent = (envStatus === "ALERT") ? "Environment: ALERT" : "Environment: OK";
-      $("envStatus").style.color = (envStatus === "ALERT") ? "#dc2626" : "";
 
-      // ----------------------------
-      // Audio / cry
-      // ----------------------------
+      // audio
+            // audio
       const cryDetectedRaw = !!a.cry_detected;
       const cryFreq = (typeof a.cry_freq_hz === "number") ? a.cry_freq_hz : null;
       const cryVol  = (typeof a.cry_volume === "number") ? a.cry_volume : null;
 
-      // auto-expire cry if ESP32 hasn't updated recently
+      // IMPORTANT: auto-expire cry if ESP32 hasn't updated recently
       const cryTs = (typeof a.ts === "number") ? a.ts : 0;
       const cryFresh = cryTs > 0 && ((Date.now() - cryTs * 1000) < 6500);
       const cryDetected = cryFresh && cryDetectedRaw;
@@ -535,19 +498,17 @@
         ? "Crying: DETECTED (ACK REQUIRED)"
         : (cryDetected ? "Crying: DETECTED" : "Crying: none");
 
-      // ----------------------------
+
       // Latch triggers (priority)
-      // ----------------------------
       if (heavyNow) latchAlarm("FALL", { drop });
       else if (faceDown) latchAlarm("FACE_DOWN");
       else if (cryDetected) latchAlarm("CRY", {
         freq: cryFreq ? Math.round(cryFreq) : null,
-        vol:  cryVol  ? Math.round(cryVol)  : null
+        vol: cryVol ? Math.round(cryVol) : null
       });
 
       setSafetyUI({ heavyNow, drop, faceDown, cryDetected, envStatus });
 
-      // chart
       if (tsM > 0) pushPoint(moveSeries, tsM, avgMove);
 
     } catch (e) {

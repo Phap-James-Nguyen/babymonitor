@@ -6,6 +6,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .state import latest_movement, latest_audio
 
+# If audio hasn't updated recently, treat cry as OFF
 CRY_STALE_SEC = 6.0
 
 
@@ -15,16 +16,24 @@ def index(request):
 
 def api_latest(request):
     now = time.time()
+
+    # return copies so we can safely adjust derived fields
     m = dict(latest_movement)
     a = dict(latest_audio)
 
+    # Auto-clear cry if audio updates stop
     ts_a = a.get("ts")
-    if isinstance(ts_a, (int, float)) and (now - ts_a) > CRY_STALE_SEC:
-        a["cry_detected"] = False
-    elif not isinstance(ts_a, (int, float)):
+    if isinstance(ts_a, (int, float)):
+        if (now - ts_a) > CRY_STALE_SEC:
+            a["cry_detected"] = False
+    else:
         a["cry_detected"] = False
 
-    return JsonResponse({"movement": m, "audio": a, "server_ts": now})
+    return JsonResponse({
+        "movement": m,
+        "audio": a,
+        "server_ts": now,
+    })
 
 
 def _parse_boolish(val, field_name="field"):
@@ -140,40 +149,6 @@ def api_data(request):
                 latest_audio["cry_volume"] = float(body["cry_volume"])
             except Exception:
                 return HttpResponseBadRequest("cry_volume must be a number")
-
-        # ✅ Accept env fields from ESP32 (preferred)
-        if "temp_c" in body:
-            try:
-                latest_audio["temp_c"] = float(body["temp_c"])
-            except Exception:
-                return HttpResponseBadRequest("temp_c must be a number")
-
-        if "temp_f" in body:
-            try:
-                latest_audio["temp_f"] = float(body["temp_f"])
-            except Exception:
-                return HttpResponseBadRequest("temp_f must be a number")
-
-        if "humidity" in body:
-            try:
-                latest_audio["humidity"] = float(body["humidity"])
-            except Exception:
-                return HttpResponseBadRequest("humidity must be a number")
-
-        if "env_status" in body:
-            s = str(body["env_status"]).upper()
-            if s not in ("OK", "ALERT"):
-                return HttpResponseBadRequest("env_status must be OK or ALERT")
-            latest_audio["env_status"] = s
-
-        # ✅ Backward-compat: if ESP sends "temperature" instead of temp_c
-        if "temperature" in body and "temp_c" not in body:
-            try:
-                tc = float(body["temperature"])
-                latest_audio["temp_c"] = tc
-                latest_audio["temp_f"] = tc * 1.8 + 32.0
-            except Exception:
-                return HttpResponseBadRequest("temperature must be a number")
 
         return JsonResponse({"ok": True, "device": "audio"})
 
